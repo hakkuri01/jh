@@ -1,0 +1,41 @@
+# OS / Editor
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+*.sw[opn]
+*~
+.idea/
+.vscode/
+*.vim
+.netrwhist
+/.kiro/
+
+# Crystal / shards (shard.lock is committed)
+/bin/
+/lib/
+/.shards/
+/docs/api/
+/coverage/
+
+# Runtime outputs
+*.log
+tmp/
+
+# Secrets / local config
+*.env
+.env.*
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+
+# Nix
+/result
+/result-*
+.direnv/
+
+# Local reference material (not published)
+/refs/
