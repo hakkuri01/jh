@@ -15,6 +15,9 @@ module JekyllHyde
   # validation problem prints one actionable line and exits non-zero before
   # anything launches. `run` returns the process exit code.
   class Entry
+    # The HTTP methods `-X` accepts; anything else is refused before launch.
+    METHODS = %w[GET HEAD POST PUT DELETE OPTIONS PATCH]
+
     def self.run(argv : Array(String), io : IO = STDOUT) : Int32
       new(io).run(argv)
     end
@@ -70,6 +73,10 @@ module JekyllHyde
       p.on("-w FILE", "--wordlist=FILE", "wordlist path (repeatable; FILE:KEYWORD for Jekyll input)") { |v| c.wordlists << v }
       p.on("-e LIST", "--extensions=LIST", "extensions to append, e.g. php,html") { |v| c.extensions = v.split(',').map(&.strip).reject(&.empty?) }
       p.on("-t N", "--threads=N", "concurrent requests (default 40)") { |v| c.threads = v.to_i? || c.threads }
+      p.on("-k", "--insecure", "skip TLS certificate verification") { c.insecure = true }
+      p.on("-X METHOD", "--method=METHOD", "HTTP request method (default GET)") { |v| c.method = v.strip.upcase }
+      p.on("-H LINE", "--header=LINE", "request header 'Name: Value' (repeatable)") { |v| c.headers << v }
+      p.on("-b COOKIE", "--cookie=COOKIE", "Cookie header value") { |v| c.cookie = v }
       p.on("-o FILE", "--output=FILE", "write results to FILE on completion") { |v| c.output = v }
       p.on("--format FMT", "export format: json or csv (default json)") { |v| c.format = v }
     end
@@ -134,7 +141,20 @@ module JekyllHyde
       return "pick a mode: --hyde or --jekyll" unless c.mode_set?
       return "a target URL is required (-u)" if c.url.empty?
       return "a wordlist is required (-w)" if c.wordlists.empty?
-      wrong_mode_flag(c) || missing_fuzz(c) || bad_format(c)
+      wrong_mode_flag(c) || bad_method(c) || bad_header(c) || missing_fuzz(c) || bad_format(c)
+    end
+
+    # The request method must be one jh knows how to send.
+    private def bad_method(c : ScanConfig) : String?
+      "method must be one of #{METHODS.join(", ")}" unless METHODS.includes?(c.method)
+    end
+
+    # Each -H must look like a header line so it can be parsed and sent.
+    private def bad_header(c : ScanConfig) : String?
+      c.headers.each do |line|
+        return "a header must look like 'Name: Value': #{line}" unless line.includes?(':')
+      end
+      nil
     end
 
     # A mode-specific flag used against the other engine.
@@ -157,11 +177,14 @@ module JekyllHyde
       nil
     end
 
-    # The first bound keyword absent from the URL, or nil when all are present.
+    # The first bound keyword absent from every request part, or nil when each
+    # appears somewhere (the URL, a header, the cookie, or the method). ffuf lets
+    # FUZZ live in any part, so a header-only keyword is valid.
     private def missing_keyword(c : ScanConfig) : String?
+      parts = [c.url, c.method, c.cookie || ""] + c.headers
       c.wordlists.each do |spec|
         keyword = Jekyll::Source.split(spec)[1]
-        return keyword unless c.url.includes?(keyword)
+        return keyword unless parts.any?(&.includes?(keyword))
       end
       nil
     end

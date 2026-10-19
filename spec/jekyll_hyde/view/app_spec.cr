@@ -83,7 +83,7 @@ describe JekyllHyde::View::App do
     app.update(JekyllHyde::Tui::KeyMsg.new("h"))     # open the reference
     shows?(app, "COMMAND REFERENCE").should be_true
     shows?(app, "FLAGS").should be_true
-    shows?(app, "recursive discovery (native)").should be_true # the Hyde panel
+    shows?(app, "recursion · calibration · link scrape").should be_true # the Hyde panel
     _, command = app.update(JekyllHyde::Tui::KeyMsg.new("tab"))
     command.should_not be_nil # the switch animation plays from the help page
     app.update(JekyllHyde::Tui::TickMsg.new(Time.instant + 5.seconds))

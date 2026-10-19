@@ -2,6 +2,7 @@ require "../tui/model"
 require "../tui/message"
 require "../core/response"
 require "../core/results"
+require "../http/client"
 require "../wordlist/list"
 require "../hyde/scan"
 require "../jekyll/scan"
@@ -72,6 +73,7 @@ module JekyllHyde::View
     @paused : Bool
     @config : ScanConfig
     @scan : (Hyde::Scan | Jekyll::Scan)? = nil
+    @export_warning : String? = nil
 
     def initialize(@config : ScanConfig)
       @target = @config.url
@@ -105,6 +107,14 @@ module JekyllHyde::View
 
     def errors : Int32
       @scan.try(&.errors) || 0
+    end
+
+    # A non-fatal notice for the dashboard footer: a failed export, or the
+    # engine's crawl-cap warning. Read on the UI fiber at a yield point.
+    def warning : String?
+      return @export_warning if @export_warning
+      scan = @scan
+      scan.is_a?(Hyde::Scan) ? scan.warning : nil
     end
 
     def record(response : Core::Response) : Nil
@@ -146,9 +156,13 @@ module JekyllHyde::View
         @channel.send(ScanHitMsg.new(self, response)) unless @cancelled
       end
       unless @cancelled
-        export(results)
+        @export_warning = export(results)
         @channel.send(ScanDoneMsg.new(self))
       end
+    rescue ex : File::Error
+      # A wordlist that cannot be read: one clean line, no absolute path
+      # (AGENTS Security 7). The export path's own failures are handled in export.
+      @channel.send(ScanFailedMsg.new(self, "could not read wordlist: #{Path[ex.file].basename}")) unless @cancelled
     rescue ex
       @channel.send(ScanFailedMsg.new(self, ex.message || "scan failed")) unless @cancelled
     end
@@ -173,7 +187,8 @@ module JekyllHyde::View
       end
       template = Jekyll::Template.new(@config.url, sources.map(&.keyword))
       input = Jekyll::Input.new(sources, @config.input_mode)
-      Jekyll::Scan.new(template, input, concurrency: @config.threads, rules: jekyll_rules, auto_calibrate: @config.calibrate?)
+      options = Http::Options.jekyll(verify_tls: !@config.insecure?, method: @config.method, headers: @config.request_headers)
+      Jekyll::Scan.new(template, input, options, concurrency: @config.threads, rules: jekyll_rules, auto_calibrate: @config.calibrate?)
     end
 
     # Hyde: recurse from the origin with one deduplicated wordlist; --no-recursion
@@ -182,7 +197,8 @@ module JekyllHyde::View
       paths = @config.wordlists.map { |spec| Jekyll::Source.split(spec)[0] }
       list = Wordlist::List.deduplicated(paths).with_extensions(@config.extensions)
       depth = @config.no_recursion? ? 1 : @config.depth
-      Hyde::Scan.new(@config.url, list, concurrency: @config.threads, max_depth: depth, auto_tune: @config.auto_tune?)
+      options = Http::Options.hyde(verify_tls: !@config.insecure?, method: @config.method, headers: @config.request_headers)
+      Hyde::Scan.new(@config.url, list, options, concurrency: @config.threads, max_depth: depth, auto_tune: @config.auto_tune?)
     end
 
     # The rules from the parsed matchers and filters; with no matcher given, the
@@ -193,14 +209,32 @@ module JekyllHyde::View
     end
 
     # Write the results to the -o path when one is set and the scan finished on
-    # its own. A finished run's hits are already on the dashboard, so a bad path
-    # is not worth tearing it down for.
-    private def export(results : Core::Results) : Nil
+    # its own, returning a one-line notice if the write fails (the hits are
+    # already on the dashboard, so a bad path is surfaced, not fatal).
+    private def export(results : Core::Results) : String?
       path = @config.output
-      return unless path
-      File.write(path, @config.format == "csv" ? results.to_csv : results.to_json)
-    rescue IO::Error
-      # the results are already on screen; a failed file write is not fatal
+      return nil unless path
+      data = @config.format == "csv" ? results.to_csv : results.to_json
+      begin
+        write_atomic(path, data)
+        nil
+      rescue File::Error
+        # No absolute path in the message (AGENTS Security 7); on-screen results stay.
+        "could not write results to #{Path[path].basename}"
+      end
+    end
+
+    # Write to a sibling temp file and rename over the target, so a failed or
+    # interrupted write never replaces a good export with a partial one.
+    private def write_atomic(path : String, data : String) : Nil
+      tmp = "#{path}.#{Process.pid}.part"
+      begin
+        File.write(tmp, data)
+        File.rename(tmp, path)
+      rescue ex
+        File.delete?(tmp)
+        raise ex
+      end
     end
 
     # Validate the operator-supplied target before any request fiber starts, so a

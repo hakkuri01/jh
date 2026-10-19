@@ -65,11 +65,15 @@ describe JekyllHyde::View::ScanSession do
     end
   end
 
-  it "reports a failure as one line when the wordlist cannot be read" do
+  it "reports a failure as one line without the absolute path when the wordlist cannot be read" do
     server = FixtureServer.new({} of String => FixtureServer::Route)
     begin
-      session = JekyllHyde::View::ScanSession.new(hyde_config(server.base, "/no/such/wordlist.txt", concurrency: 2, depth: 1))
-      drain(session).should be_a(JekyllHyde::View::ScanFailedMsg)
+      session = JekyllHyde::View::ScanSession.new(hyde_config(server.base, "/no/such/dir/secret-wordlist.txt", concurrency: 2, depth: 1))
+      msg = drain(session)
+      msg.should be_a(JekyllHyde::View::ScanFailedMsg)
+      reason = msg.as(JekyllHyde::View::ScanFailedMsg).reason
+      reason.should contain("secret-wordlist.txt")
+      reason.should_not contain("/no/such/dir") # no internal path leaks on screen
       session.hits.should be_empty
     ensure
       server.stop
@@ -150,10 +154,59 @@ describe JekyllHyde::View::ScanSession do
       session = JekyllHyde::View::ScanSession.new(config)
       drain(session).should be_a(JekyllHyde::View::ScanDoneMsg)
       File.read(outfile.path).should contain("/admin")
+      session.warning.should be_nil
     ensure
       server.stop
       File.delete(path)
       File.delete(outfile.path)
+    end
+  end
+
+  it "sends supplied headers and a cookie but never writes them into an export" do
+    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret body")})
+    path = wordlist_file("admin")
+    outfile = File.tempfile("jh_out")
+    outfile.close
+    begin
+      config = jekyll_config("#{server.base}/FUZZ", path)
+      config.headers = ["Authorization: Bearer LEAKTOKEN"]
+      config.cookie = "session=LEAKCOOKIE"
+      config.output = outfile.path
+      config.format = "json"
+      session = JekyllHyde::View::ScanSession.new(config)
+      drain(session).should be_a(JekyllHyde::View::ScanDoneMsg)
+      # the auth material went out on the wire ...
+      server.received_headers.any? { |h| h["Authorization"]? == "Bearer LEAKTOKEN" }.should be_true
+      server.received_headers.any? { |h| h["Cookie"]? == "session=LEAKCOOKIE" }.should be_true
+      # ... but never landed in the results file
+      dump = File.read(outfile.path)
+      dump.should contain("/admin")
+      dump.should_not contain("LEAKTOKEN")
+      dump.should_not contain("LEAKCOOKIE")
+    ensure
+      server.stop
+      File.delete(path)
+      File.delete(outfile.path)
+    end
+  end
+
+  it "surfaces a failed export as a warning and leaves no partial file (not silent success)" do
+    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
+    path = wordlist_file("admin")
+    begin
+      config = jekyll_config("#{server.base}/FUZZ", path)
+      config.output = "/no/such/dir/out.json" # unwritable directory
+      session = JekyllHyde::View::ScanSession.new(config)
+      drain(session).should be_a(JekyllHyde::View::ScanDoneMsg) # results still complete
+      session.hits.map(&.url.sub(server.base, "")).should contain("/admin")
+      warning = session.warning
+      warning.should_not be_nil
+      warning.not_nil!.should contain("out.json")
+      warning.not_nil!.should_not contain("/no/such/dir") # no internal path on screen
+      File.exists?("/no/such/dir/out.json.#{Process.pid}.part").should be_false
+    ensure
+      server.stop
+      File.delete(path)
     end
   end
 

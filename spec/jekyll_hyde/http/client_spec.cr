@@ -56,6 +56,32 @@ describe JekyllHyde::Http::Client do
     end
   end
 
+  it "sends the operator method and headers verbatim, with a default User-Agent" do
+    server = FixtureServer.new({"/x" => FixtureServer::Route.new(200, "ok")})
+    begin
+      opts = JekyllHyde::Http::Options.new(method: "POST", headers: ["X-Test: hi", "Cookie: a=b"])
+      JekyllHyde::Http::Client.new(server.base, opts).fetch("/x")
+      server.received_methods.should contain("POST")
+      sent = server.received_headers.first
+      sent["X-Test"].should eq("hi")
+      sent["Cookie"].should eq("a=b")
+      sent["User-Agent"].should start_with("jh/")
+    ensure
+      server.stop
+    end
+  end
+
+  it "lets an operator header override the default User-Agent" do
+    server = FixtureServer.new({"/x" => FixtureServer::Route.new(200, "ok")})
+    begin
+      opts = JekyllHyde::Http::Options.new(headers: ["User-Agent: custom-agent/9"])
+      JekyllHyde::Http::Client.new(server.base, opts).fetch("/x")
+      server.received_headers.first["User-Agent"].should eq("custom-agent/9")
+    ensure
+      server.stop
+    end
+  end
+
   it "keeps the fixture on loopback only" do
     server = FixtureServer.new
     begin

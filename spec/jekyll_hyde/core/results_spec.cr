@@ -40,4 +40,19 @@ describe JekyllHyde::Core::Results do
     lines.first.should eq("url,status,size,words,lines,location")
     lines[1].should start_with(%("https://x/a,b",200,))
   end
+
+  it "neutralizes a CSV formula in a hostile redirect location" do
+    results = JekyllHyde::Core::Results.new
+    results << result("https://x/go", 301, location: "=HYPERLINK(\"http://evil\")")
+    cells = results.to_csv.lines[1]
+    cells.should contain("'=HYPERLINK") # a leading = is quoted off so no formula runs
+    cells.should_not contain(",=HYPERLINK")
+  end
+
+  it "sanitizes an escape sequence out of exported fields" do
+    results = JekyllHyde::Core::Results.new
+    results << result("https://x/a\e[2Jb", 200, location: "https://x/c\e[1md")
+    results.to_json.should_not contain('\e')
+    results.to_csv.should_not contain('\e')
+  end
 end

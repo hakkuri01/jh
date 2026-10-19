@@ -96,4 +96,32 @@ describe JekyllHyde::Jekyll::Scan do
       server.stop
     end
   end
+
+  it "substitutes FUZZ into a header, not only the URL" do
+    server = FixtureServer.new({"/ping" => FixtureServer::Route.new(200, "ok")})
+    begin
+      # FUZZ lives only in the header here; the URL is static.
+      template = JekyllHyde::Jekyll::Template.new("#{server.base}/ping", ["FUZZ"])
+      options = JekyllHyde::Http::Options.jekyll(headers: ["X-Fuzz: FUZZ"])
+      rules = JekyllHyde::Jekyll::Rules.new([JekyllHyde::Jekyll::Rule.build("status", "all")])
+      JekyllHyde::Jekyll::Scan.new(template, wordlist("alpha", "beta"), options, concurrency: 2, rules: rules).run
+      sent = server.received_headers.compact_map { |h| h["X-Fuzz"]? }.to_set
+      sent.should eq(Set{"alpha", "beta"})
+    ensure
+      server.stop
+    end
+  end
+
+  it "sends the operator method on every fuzzed request" do
+    server = FixtureServer.new({} of String => FixtureServer::Route, wildcard: true)
+    begin
+      template = JekyllHyde::Jekyll::Template.new("#{server.base}/FUZZ")
+      options = JekyllHyde::Http::Options.jekyll(method: "HEAD")
+      rules = JekyllHyde::Jekyll::Rules.new([JekyllHyde::Jekyll::Rule.build("status", "all")])
+      JekyllHyde::Jekyll::Scan.new(template, wordlist("a", "b"), options, concurrency: 2, rules: rules).run
+      server.received_methods.uniq.should eq(["HEAD"])
+    ensure
+      server.stop
+    end
+  end
 end

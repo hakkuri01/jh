@@ -145,7 +145,7 @@ module JekyllHyde::View
     private def results_state : Results::State
       if session = @session
         elapsed = (Time.instant - @scan_at).total_seconds
-        progress = Results::Progress.new(session.running?, session.error, elapsed, session.requests, session.errors, session.paused?)
+        progress = Results::Progress.new(session.running?, session.error, elapsed, session.requests, session.errors, session.paused?, session.warning)
         Results::State.new(@mode, session.target, session.hits, progress, @scroll)
       else
         Results::State.new(@mode, "", [] of Core::Response, Results::Progress.new(false, nil, 0.0, 0, 0), 0)

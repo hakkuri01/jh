@@ -15,8 +15,19 @@ describe JekyllHyde::Jekyll::Template do
     template.path("x").should eq("/search?q=x")
   end
 
-  it "rejects a URL without FUZZ" do
-    expect_raises(ArgumentError) { JekyllHyde::Jekyll::Template.new("http://host/admin") }
+  it "substitutes only the keywords present in the URL, leaving others for other request parts" do
+    # A keyword absent from the URL (fuzzed in a header instead) is no longer
+    # rejected; the URL is simply left without it.
+    template = JekyllHyde::Jekyll::Template.new("http://host/admin")
+    template.path("x").should eq("/admin")
+    multi = JekyllHyde::Jekyll::Template.new("http://host/FUZZ", ["FUZZ", "FUZ2Z"])
+    multi.path({"FUZZ" => "a", "FUZ2Z" => "b"}).should eq("/a")
+  end
+
+  it "fills a keyword into any request text, not just the URL" do
+    template = JekyllHyde::Jekyll::Template.new("http://host/FUZZ")
+    template.fill("X-Token: FUZZ", {"FUZZ" => "secret"}).should eq("X-Token: secret")
+    template.fill("no keyword here", {"FUZZ" => "x"}).should eq("no keyword here")
   end
 
   it "rejects FUZZ in the host" do
@@ -36,9 +47,5 @@ describe JekyllHyde::Jekyll::Template do
     template = JekyllHyde::Jekyll::Template.new("http://host/FUZZ/FUZ2Z", ["FUZZ", "FUZ2Z"])
     # FUZZ's value is the literal FUZ2Z; the single pass leaves it intact
     template.path({"FUZZ" => "FUZ2Z", "FUZ2Z" => "b"}).should eq("/FUZ2Z/b")
-  end
-
-  it "rejects a keyword missing from the URL" do
-    expect_raises(ArgumentError) { JekyllHyde::Jekyll::Template.new("http://host/FUZZ", ["FUZZ", "FUZ2Z"]) }
   end
 end

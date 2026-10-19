@@ -12,24 +12,44 @@ module JekyllHyde::Hyde
     # robots.txt Allow/Disallow lines (handled per line, so no multiline flag).
     ROBOTS = /^\s*(?:allow|disallow)\s*:\s*([^\s#]*)/i
     # RFC 3986 characters that may not appear in a path, stripped per segment.
+    # This mirrors feroxbuster's url_regex.replace_all exactly: a deliberate
+    # parity choice. AGENTS Security 2 would prefer percent-encoding to repair,
+    # but these bytes are illegal in a path anyway and both references strip them,
+    # so stripping is the intentional standard here, revisited only if a real
+    # target is ever shown to be mis-probed because of it.
     URL_CHARS = /["<>\\^`{|} ]/
+    # The deepest path expanded into parent sub-paths. The walk is O(segments^2)
+    # in time and output, so a hostile body emitting a link with thousands of
+    # segments is capped here: beyond this, only the full path is kept, no parents
+    # (AGENTS Big O 6, text-from-outside). Real paths are nowhere near this.
+    MAX_PATH_SEGMENTS = 100
 
     # The LinkFinder regex (GerbenJavado/LinkFinder): quoted URL and endpoint-like
     # strings, extended mode, group 1 without the quotes. The single-quoted
     # heredoc keeps the backslashes literal, which is why ameba's unescape rule is
     # off on the line.
+    #
+    # The alternation is wrapped in an atomic group `(?>...)`. feroxbuster runs
+    # this on Rust's linear regex engine; PCRE2 (Crystal's engine) backtracks, and
+    # a quoted run with no closing quote (`"/a/a/a...`) makes it retry the greedy
+    # run O(n) times for O(n squared) blow-up, a hostile-target DoS within the body
+    # cap. Every branch's run already stops before the closing quote, so it never
+    # needs to give characters back on real input: the atomic group changes no
+    # match, it only forbids the backtracking feroxbuster's engine never did.
     LINKFINDER = Regex.new(<<-'PATTERN', Regex::Options::EXTENDED) # ameba:disable Style/HeredocEscape
       (?:"|')
       (
-        ((?:[a-zA-Z]{1,10}://|//)[^"'/]{1,}\.[a-zA-Z]{2,}[^"']{0,})
-        |
-        ((?:/|\.\./|\./)[^"'><,;| *()(%%$^/\\\[\]][^"'><,;|()]{1,})
-        |
-        ([a-zA-Z0-9_\-/]{1,}/[a-zA-Z0-9_\-/.]{1,}\.(?:[a-zA-Z]{1,4}|action)(?:[\?|\#][^"|']{0,}|))
-        |
-        ([a-zA-Z0-9_\-/]{1,}/[a-zA-Z0-9_\-/]{3,}(?:[\?|\#][^"|']{0,}|))
-        |
-        ([a-zA-Z0-9_\-]{1,}\.(?:php|asp|aspx|jsp|json|action|html|js|txt|xml)(?:[\?|\#][^"|']{0,}|))
+        (?>
+          ((?:[a-zA-Z]{1,10}://|//)[^"'/]{1,}\.[a-zA-Z]{2,}[^"']{0,})
+          |
+          ((?:/|\.\./|\./)[^"'><,;| *()(%%$^/\\\[\]][^"'><,;|()]{1,})
+          |
+          ([a-zA-Z0-9_\-/]{1,}/[a-zA-Z0-9_\-/.]{1,}\.(?:[a-zA-Z]{1,4}|action)(?:[\?|\#][^"|']{0,}|))
+          |
+          ([a-zA-Z0-9_\-/]{1,}/[a-zA-Z0-9_\-/]{3,}(?:[\?|\#][^"|']{0,}|))
+          |
+          ([a-zA-Z0-9_\-]{1,}\.(?:php|asp|aspx|jsp|json|action|html|js|txt|xml)(?:[\?|\#][^"|']{0,}|))
+        )
       )
       (?:"|')
       PATTERN
@@ -100,9 +120,13 @@ module JekyllHyde::Hyde
     end
 
     # Sub-path expansion: "a/b/c.js" -> ["a/b/c.js", "a/b/", "a/"]. The leaf keeps
-    # no trailing slash; each parent directory gets one.
+    # no trailing slash; each parent directory gets one. A pathologically deep
+    # path is not expanded into every parent (the walk is quadratic in segments);
+    # past the cap only the full path is kept.
     private def sub_paths(path : String) : Array(String)
       parts = normalize(path).split('/').map(&.gsub(URL_CHARS, "")).reject(&.empty?)
+      return [] of String if parts.empty?
+      return [parts.join("/")] if parts.size > MAX_PATH_SEGMENTS
       result = [] of String
       parts.size.times do |index|
         break if parts.empty?

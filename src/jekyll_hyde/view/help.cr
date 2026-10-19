@@ -33,9 +33,9 @@ module JekyllHyde::View
     ]
     HYDE = [
       {"-d", "max recursion depth"},
-      {"-r", "recursive discovery (native)"},
-      {"auto", "wildcard calibration · link scrape"},
-      {"tune", "backs off on 429/403 floods"},
+      {"--no-recursion", "scan only the target, no descent"},
+      {"--auto-tune", "back off on 429/403 floods"},
+      {"native", "recursion · calibration · link scrape"},
     ]
     JEKYLL = [
       {"FUZZ", "injection keyword, required in -u"},

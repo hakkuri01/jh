@@ -61,4 +61,41 @@ describe JekyllHyde::Hyde::Scan do
       server.stop
     end
   end
+
+  it "scans beneath a target subpath, requesting it on the wire (not resetting to root)" do
+    server = FixtureServer.new({
+      "/app/"      => FixtureServer::Route.new(200, "app home"),
+      "/app/admin" => FixtureServer::Route.new(200, "app admin panel"),
+      "/admin"     => FixtureServer::Route.new(200, "ROOT admin, out of scope"),
+    })
+    begin
+      results = JekyllHyde::Hyde::Scan.new("#{server.base}/app", wordlist("admin"), concurrency: 4).run
+      hits = found(results, server.base)
+      hits.should contain({"/app/admin", 200})
+      hits.map(&.first).should_not contain("/admin") # root was never in scope
+      # The subpath was actually requested, not just relabeled.
+      server.received.should contain("/app/admin")
+      server.received.should_not contain("/admin")
+    ensure
+      server.stop
+    end
+  end
+
+  it "stops a hostile fresh-link chain at the frontier cap" do
+    # Every numeric path returns a distinct body linking to the next number, an
+    # endless same-origin chain. The frontier cap, not the target, ends the walk.
+    server = FixtureServer.new(responder: ->(path : String) {
+      num = path.lstrip('/').to_i?
+      num ? FixtureServer::Route.new(200, %(<a href="/#{num + 1}">next</a> unique body #{num})) : nil
+    })
+    begin
+      scan = JekyllHyde::Hyde::Scan.new(server.base, wordlist("0"), concurrency: 4, max_frontier: 40)
+      results = scan.run
+      scan.completed.should be <= 60 # bounded: the cap plus one in-flight pool, not unbounded
+      scan.warning.should_not be_nil
+      results.size.should be <= 60
+    ensure
+      server.stop
+    end
+  end
 end

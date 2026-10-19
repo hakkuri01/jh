@@ -3,6 +3,7 @@ require "openssl"
 require "uri"
 require "../version"
 require "./outcome"
+require "./request"
 
 module JekyllHyde::Http
   # One actionable line, no stack trace (AGENTS security), raised on a failed probe.
@@ -11,41 +12,55 @@ module JekyllHyde::Http
 
   # Per-request knobs. `Options.new` is the neutral default (10s, 5 MB); each mode
   # builds its own values through `.jekyll` / `.hyde`. Timeouts are in seconds.
+  # *method* and *headers* carry the operator's `-X`/`-H`/`-b` (headers as raw
+  # "Name: Value" lines, the cookie folded in); both default to a plain GET with
+  # no extra headers, so a scan that sets neither is byte-identical to before.
   record Options,
     connect_timeout : Float64 = 10.0,
     read_timeout : Float64 = 10.0,
     max_body_size : Int32 = 5_242_880,
     verify_tls : Bool = true,
-    user_agent : String = "jh/#{JekyllHyde::VERSION}" do
+    user_agent : String = "jh/#{JekyllHyde::VERSION}",
+    method : String = "GET",
+    headers : Array(String) = [] of String do
     # Jekyll defaults: a 10s request timeout and a 5 MB body cap. jh caps the body
     # because an unbounded untrusted body is a DoS (AGENTS security), so a body
-    # past 5 MB is truncated.
-    def self.jekyll : Options
-      new(connect_timeout: 10.0, read_timeout: 10.0, max_body_size: 5_242_880)
+    # past 5 MB is truncated. *verify_tls* is the operator's `-k` choice; *method*
+    # and *headers* carry `-X`/`-H`/`-b`.
+    def self.jekyll(verify_tls : Bool = true, method : String = "GET", headers : Array(String) = [] of String) : Options
+      new(connect_timeout: 10.0, read_timeout: 10.0, max_body_size: 5_242_880, verify_tls: verify_tls, method: method, headers: headers)
     end
 
     # Hyde defaults: a 7s request timeout and a 4 MB body read cap.
-    def self.hyde : Options
-      new(connect_timeout: 7.0, read_timeout: 7.0, max_body_size: 4_194_304)
+    def self.hyde(verify_tls : Bool = true, method : String = "GET", headers : Array(String) = [] of String) : Options
+      new(connect_timeout: 7.0, read_timeout: 7.0, max_body_size: 4_194_304, verify_tls: verify_tls, method: method, headers: headers)
     end
   end
 
   # One keep-alive HTTP client bound to a single origin, the unit a pool worker
-  # reuses across a scan. GET only for now; a redirect is recorded, not followed,
-  # so a 3xx keeps its Location for the engine to queue.
+  # reuses across a scan. A redirect is recorded, not followed, so a 3xx keeps
+  # its Location for the engine to queue.
   class Client
     @http : HTTP::Client
+    @base_headers : HTTP::Headers
 
     def initialize(base : String, @options : Options = Options.new)
       @http = build(URI.parse(base))
+      @base_headers = Request.headers_from(@options.headers)
     end
 
-    # Fetch *path* once and return its Outcome. Raises Error on a connect, TLS, or
-    # timeout failure.
+    # Fetch *path* with the options' static method and headers (the Hyde and
+    # calibration path). Raises Error on a connect, TLS, or timeout failure.
     def fetch(path : String) : Outcome
-      headers = HTTP::Headers{"User-Agent" => @options.user_agent}
+      fetch(Request.new(@options.method, path, @base_headers))
+    end
+
+    # Fetch a fully built *request* (the Jekyll path, where method and headers may
+    # have had FUZZ substituted per combination). Raises Error on failure.
+    def fetch(request : Request) : Outcome
+      headers = merged_headers(request.headers)
       started = Time.instant
-      outcome = @http.get(path, headers) { |response| read_outcome(response) }
+      outcome = @http.exec(request.method, request.path, headers) { |response| read_outcome(response) }
       elapsed = Time.instant - started
       # A truncated read left bytes unread on the socket; Crystal reuses a
       # keep-alive connection, and leftover body corrupts the next request on it
@@ -54,7 +69,16 @@ module JekyllHyde::Http
       @http.close if outcome.truncated
       outcome.copy_with(duration: elapsed)
     rescue ex : IO::Error | OpenSSL::SSL::Error
-      raise Error.new("#{path}: #{ex.message}")
+      raise Error.new("#{request.path}: #{ex.message}")
+    end
+
+    # A fresh header set for one request: the operator's headers, plus the default
+    # User-Agent only when they did not supply one of their own.
+    private def merged_headers(headers : HTTP::Headers) : HTTP::Headers
+      result = HTTP::Headers.new
+      headers.each { |name, values| values.each { |value| result.add(name, value) } }
+      result["User-Agent"] = @options.user_agent unless result.has_key?("User-Agent")
+      result
     end
 
     private def build(uri : URI) : HTTP::Client
@@ -76,14 +100,17 @@ module JekyllHyde::Http
     private def read_outcome(response : HTTP::Client::Response) : Outcome
       cap = @options.max_body_size
       buffer = IO::Memory.new
-      chunk = Bytes.new(16_384)
       total = 0
-      io = response.body_io
-      while (count = io.read(chunk)) > 0
-        take = Math.min(count, cap + 1 - total)
-        buffer.write(chunk[0, take])
-        total += take
-        break if total > cap
+      # A HEAD, 204, or 304 response has no body to stream; body_io? is nil there,
+      # so guard it rather than assume every response carries a body.
+      if io = response.body_io?
+        chunk = Bytes.new(16_384)
+        while (count = io.read(chunk)) > 0
+          take = Math.min(count, cap + 1 - total)
+          buffer.write(chunk[0, take])
+          total += take
+          break if total > cap
+        end
       end
       truncated = total > cap
       body = truncated ? buffer.to_slice[0, cap] : buffer.to_slice

@@ -56,4 +56,20 @@ describe JekyllHyde::Hyde::Extractor do
     paths.should contain("/assets/app.min.js")
     paths.should contain("/assets/")
   end
+
+  it "stays linear on an unterminated-quote body instead of backtracking without bound" do
+    # A quoted run with no closing quote is the classic LinkFinder ReDoS shape;
+    # the atomic group keeps PCRE2 linear where feroxbuster's engine already was.
+    # A catastrophic regex would hang the suite outright, so completing at all is
+    # the evidence here (no wall-clock assertion).
+    extractor.extract(%("#{"/a" * 100_000}), "/").size.should be < 1000
+  end
+
+  it "caps sub-path expansion so one hugely deep link cannot blow up time or memory" do
+    # A single link with thousands of segments would expand to O(segments^2)
+    # parents; past the cap only the full path is kept.
+    deep = "/#{(1..5_000).map { |n| "s#{n}" }.join("/")}/leaf"
+    paths = extractor.extract(%(<a href="#{deep}">x</a>), "/")
+    paths.size.should be <= 2 # the full path, not 5000 parent directories
+  end
 end

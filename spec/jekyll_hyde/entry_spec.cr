@@ -87,9 +87,46 @@ describe JekyllHyde::Entry do
     config.depth.should eq(2)
   end
 
+  it "wires -k to the insecure (skip TLS verify) switch, off by default" do
+    config_for(["--hyde", "-u", "http://host/", "-w", "words.txt"]).insecure?.should be_false
+    config_for(["--hyde", "-u", "http://host/", "-w", "words.txt", "-k"]).insecure?.should be_true
+  end
+
+  it "clamps an out-of-range thread count instead of sizing an unbounded pool" do
+    config_for(["--hyde", "-u", "http://host/", "-w", "x", "-t", "9999999"]).threads.should eq(JekyllHyde::ScanConfig::MAX_THREADS)
+    config_for(["--hyde", "-u", "http://host/", "-w", "x", "-t", "0"]).threads.should eq(1)
+  end
+
   it "parses a clusterbomb of keyworded wordlists into a config" do
     config = config_for(["--jekyll", "-u", "http://host/FUZZ/FUZ2Z", "-w", "a:FUZZ", "-w", "b:FUZ2Z", "--mode", "pitchfork"])
     config.wordlists.should eq(["a:FUZZ", "b:FUZ2Z"])
     config.input_mode.should eq(JekyllHyde::Jekyll::Input::Mode::Pitchfork)
+  end
+
+  it "parses -X, repeatable -H, and -b into the config" do
+    config = config_for(["--hyde", "-u", "http://host/", "-w", "x", "-X", "post", "-H", "A: 1", "-H", "B: 2", "-b", "s=1"])
+    config.method.should eq("POST")
+    config.headers.should eq(["A: 1", "B: 2"])
+    config.cookie.should eq("s=1")
+    config.request_headers.should eq(["A: 1", "B: 2", "Cookie: s=1"])
+  end
+
+  it "rejects an unknown request method" do
+    io = IO::Memory.new
+    JekyllHyde::Entry.run(["--hyde", "-u", "http://host/", "-w", "x", "-X", "frob"], io).should eq(2)
+    io.to_s.should contain("method must be one of")
+  end
+
+  it "rejects a malformed header" do
+    io = IO::Memory.new
+    JekyllHyde::Entry.run(["--hyde", "-u", "http://host/", "-w", "x", "-H", "no-colon-here"], io).should eq(2)
+    io.to_s.should contain("Name: Value")
+  end
+
+  it "accepts a Jekyll keyword that appears only in a header, not the URL" do
+    io = IO::Memory.new # not a tty, so a valid command stops at the terminal gate
+    JekyllHyde::Entry.run(["--jekyll", "-u", "http://host/static", "-w", "x", "-H", "X-Key: FUZZ"], io).should eq(2)
+    io.to_s.should_not contain("FUZZ keyword")
+    io.to_s.should contain("interactive terminal")
   end
 end

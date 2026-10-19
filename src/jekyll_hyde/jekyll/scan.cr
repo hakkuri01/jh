@@ -9,17 +9,22 @@ require "./rules"
 require "./template"
 
 module JekyllHyde::Jekyll
-  # A lazy stream of request paths: each input combination substituted into the
-  # template, generated on demand so a large clusterbomb product is never
-  # materialized. The pool pulls paths under backpressure.
-  private struct PathStream
-    include Enumerable(String)
+  # A lazy stream of requests: each input combination substituted into the
+  # template's URL, method, and headers, generated on demand so a large
+  # clusterbomb product is never materialized. The pool pulls requests under
+  # backpressure.
+  private struct RequestStream
+    include Enumerable(Http::Request)
 
-    def initialize(@input : Input, @template : Template)
+    def initialize(@input : Input, @template : Template, @method : String, @headers : Array(String))
     end
 
-    def each(& : String ->) : Nil
-      @input.each { |values| yield @template.path(values) }
+    def each(& : Http::Request ->) : Nil
+      @input.each do |values|
+        method = @template.fill(@method, values)
+        headers = Http::Request.headers_from(@headers.map { |line| @template.fill(line, values) })
+        yield Http::Request.new(method, @template.path(values), headers)
+      end
     end
   end
 
@@ -69,8 +74,8 @@ module JekyllHyde::Jekyll
 
     private def perform : Core::Results
       rules = @auto_calibrate ? calibrated_rules : @rules
-      paths = PathStream.new(@input, @template)
-      Http::Pool.new(@template.origin, @options, @concurrency).run(paths, @cancel, @pause) { |job| handle(job, rules) }
+      requests = RequestStream.new(@input, @template, @options.method, @options.headers)
+      Http::Pool.new(@template.origin, @options, @concurrency).run(requests, @cancel, @pause) { |job| handle(job, rules) }
       @results
     end
 

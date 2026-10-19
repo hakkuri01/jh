@@ -16,8 +16,14 @@ class FixtureServer
 
   getter port : Int32
   getter max_in_flight : Int32 = 0
+  # Every request path the server received, so a spec can assert what actually
+  # went on the wire (not just what the engine reported), plus the method and
+  # headers of each, appended in lockstep.
+  getter received = [] of String
+  getter received_methods = [] of String
+  getter received_headers = [] of HTTP::Headers
 
-  def initialize(@routes : Hash(String, Route) = {} of String => Route, *, @wildcard : Bool = false, @delay : Time::Span = Time::Span.zero)
+  def initialize(@routes : Hash(String, Route) = {} of String => Route, *, @wildcard : Bool = false, @delay : Time::Span = Time::Span.zero, @responder : Proc(String, Route?)? = nil)
     @in_flight = 0
     @server = HTTP::Server.new { |context| handle(context) }
     address = @server.bind_tcp("127.0.0.1", 0)
@@ -46,8 +52,13 @@ class FixtureServer
   end
 
   private def respond(context : HTTP::Server::Context) : Nil
+    path = context.request.path
+    @received << path
+    @received_methods << context.request.method
+    @received_headers << context.request.headers
     sleep(@delay) unless @delay.zero?
-    route = @routes[context.request.path]?
+    route = @routes[path]?
+    route ||= @responder.try(&.call(path))
     route ||= Route.new(200, "wildcard") if @wildcard
     unless route
       context.response.status_code = 404

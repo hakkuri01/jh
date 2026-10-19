@@ -44,9 +44,13 @@ module JekyllHyde::Jekyll
     end
 
     private def probe(strings : Array(String)) : Array(Candidate)
-      paths = strings.map { |string| @template.path(fill(string)) }
+      requests = strings.map do |string|
+        values = fill(string)
+        headers = Http::Request.headers_from(@options.headers.map { |line| @template.fill(line, values) })
+        Http::Request.new(@template.fill(@options.method, values), @template.path(values), headers)
+      end
       out = [] of Candidate
-      Http::Pool.new(@template.origin, @options, paths.size).run(paths) do |job|
+      Http::Pool.new(@template.origin, @options, requests.size).run(requests) do |job|
         if outcome = job.outcome
           response = Core::Response.jekyll("#{@template.origin}#{job.path}", outcome.status, outcome.body, outcome.location)
           out << Candidate.new(response, outcome.body, outcome.duration, outcome.headers)
