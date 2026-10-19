@@ -4,17 +4,16 @@
 
 <p align="center">
 <img src="https://img.shields.io/badge/Crystal-black.svg?style=plastic&logo=crystal&logoColor=white">
-<img src="https://img.shields.io/badge/v0.1.0-B060E8.svg?style=plastic&logo=git&logoColor=white">
-<img src="https://img.shields.io/badge/Bug%20Bounty-F03048.svg?style=plastic&logo=owasp&logoColor=white">
+<img src="https://img.shields.io/badge/v0.1.0-black.svg?style=plastic&logo=git&logoColor=B060E8">
+<img src="https://img.shields.io/badge/Bug%20Bounty-black.svg?style=plastic&logo=owasp&logoColor=F03048">
 </p>
 
-Jekyll // Hyde is a single-binary interactive TUI web fuzzer with two personalities in one shell. Two tools defined the two ways people fuzz the web, and jh gives each one a mode: Hyde takes after [feroxbuster](https://github.com/epi052/feroxbuster), the broad, recursive, auto-tuning discovery you reach for to open a target, and Jekyll takes after [ffuf](https://github.com/ffuf/ffuf), the precise, templated `FUZZ` fuzzing you reach for once you know what you're looking for. jh marries those two personalities into one cohesive, keystroke-switchable TUI fuzzer, so a single session carries a target from broad discovery into focused follow-on work without switching back and forth between two separate tools.
+# Jekyll // Hyde
+A single-binary interactive web fuzzer TUI with two personalities in one shell. Two tools defined the two ways people fuzz the web, and jh gives each one a mode: Hyde takes after [feroxbuster](https://github.com/epi052/feroxbuster), the broad, recursive, auto-tuning discovery you reach for to open a target, and Jekyll takes after [ffuf](https://github.com/ffuf/ffuf), the precise, templated `FUZZ` fuzzing you reach for once you know what you're looking for. jh marries those two personalities into one cohesive, keystroke-switchable TUI fuzzer, so a single session carries a target from broad discovery into focused follow-on work without switching back and forth between two separate tools.
 
 > [!CAUTION]
 >
 > *Jekyll // Hyde is intended for authorized security testing and research. Always ensure you have explicit permission to scan targets you do not own.*
-
----
 
 ## Architecture
 
@@ -30,8 +29,6 @@ Opens in Hyde and switches to Jekyll (and back) with `Tab`; the transition is a 
 - **Jekyll**: precise, templated fuzzing. A `FUZZ` keyword marks the injection point in the URL, a header (`-H`), a cookie (`-b`), or the method (`-X`), substituted per request. Explicit status, size, word, line, regex, and time matchers and filters (combined with and/or), clusterbomb and pitchfork multi-wordlist input, and opt-in auto-calibration keep the scan tightly scoped.
 
 Everything is interactive: you compose the scan (URL, flags, switches) in the shell, watch it run live, and the composition is itself the run command, shown live and copyable at the foot of the form.
-
----
 
 ## Install
 
@@ -59,8 +56,6 @@ just setup                   # fetch and build the one dev dependency (Ameba)
 just verify                  # the gate
 ./bin/jh                     # run
 ```
-
----
 
 ## Usage
 
@@ -148,8 +143,6 @@ jh --jekyll -u https://example.com/FUZZ/FUZ2Z -w words.txt:FUZZ -w vals.txt:FUZ2
 | Anywhere | `ctrl+c` | Quit |
 
 A bare drag selects and copies text, and the wheel scrolls; the app does not capture the mouse. `esc` never cancels a running scan or drops a view by reflex; `q` is the one that steps back. A full command needs a terminal to draw into: run outside one (a pipe or redirect) and it prints an error instead of opening, so run it in a terminal. A bare `jh` with no arguments on a pipe prints its banner and version instead.
-
----
 
 ## Output
 

@@ -243,6 +243,7 @@ into `verify` later.
   (`README update`).
 - **No AI attribution** anywhere: commit or PR. End after the content and any
   real human trailer.
+- **Commit format**: <type>: <description>
 
 ### Refactoring and Bulk Edits
 
