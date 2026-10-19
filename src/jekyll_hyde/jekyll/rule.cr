@@ -13,7 +13,7 @@ module JekyllHyde::Jekyll
   abstract class Rule
     abstract def matches?(candidate : Candidate) : Bool
 
-    # Build a rule by its filter name (`-mc`/`-fc` -> status, and so on).
+    # Build a rule by its filter name (`--mc`/`--fc` -> status, and so on).
     # Raises ArgumentError on an unknown name or a malformed value.
     def self.build(name : String, value : String) : Rule
       case name
@@ -45,7 +45,7 @@ module JekyllHyde::Jekyll
     end
   end
 
-  # Status rule (`-mc`/`-fc`): ValueRanges over the status code, or "all".
+  # Status rule (`--mc`/`--fc`): ValueRanges over the status code, or "all".
   class StatusRule < Rule
     def initialize(value : String)
       @ranges = [] of ValueRange
@@ -62,32 +62,32 @@ module JekyllHyde::Jekyll
     end
   end
 
-  # Size rule (`-ms`/`-fs`): ValueRanges over the body size in bytes.
+  # Size rule (`--ms`/`--fs`): ValueRanges over the body size in bytes.
   class SizeRule < RangeRule
     def metric(candidate : Candidate) : Int64
       candidate.response.size
     end
   end
 
-  # Word rule (`-mw`/`-fw`): ValueRanges over the body word count.
+  # Word rule (`--mw`/`--fw`): ValueRanges over the body word count.
   class WordRule < RangeRule
     def metric(candidate : Candidate) : Int64
       candidate.response.words.to_i64
     end
   end
 
-  # Line rule (`-ml`/`-fl`): ValueRanges over the body line count.
+  # Line rule (`--ml`/`--fl`): ValueRanges over the body line count.
   class LineRule < RangeRule
     def metric(candidate : Candidate) : Int64
       candidate.response.lines.to_i64
     end
   end
 
-  # Regex rule (`-mr`/`-fr`): the pattern matched against the response headers
+  # Regex rule (`--mr`/`--fr`): the pattern matched against the response headers
   # followed by the body ("Name: value\r\n" lines, then the raw body). Headers
   # arrive already valid UTF-8 from the client; the body is scrubbed to valid
   # UTF-8 first, since it is untrusted. One deliberate limit: the pattern is
-  # static, with no substitution of the fuzzed input into it (so `-mr FUZZ` does
+  # static, with no substitution of the fuzzed input into it (so `--mr FUZZ` does
   # not match where the body echoes the current word); that would thread a
   # per-request input map through the shared pool for a niche feature, and the
   # operator can match a literal value instead.
@@ -112,7 +112,7 @@ module JekyllHyde::Jekyll
     end
   end
 
-  # Time rule (`-mt`/`-ft`): ">N" matches a request slower than N ms, "<N"
+  # Time rule (`--mt`/`--ft`): ">N" matches a request slower than N ms, "<N"
   # one faster. Exactly one of the two prefixes is required.
   class TimeRule < Rule
     @greater : Bool

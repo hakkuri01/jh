@@ -2,6 +2,7 @@ require "../tui/model"
 require "../tui/program"
 require "../tui/terminal"
 require "../render/graphics"
+require "../scan_config"
 require "./scene"
 require "./shell"
 require "./help"
@@ -57,8 +58,9 @@ module JekyllHyde::View
     @scroll : Int32
     @rows : Int32
     @scan_at : Time::Instant
+    @pending : ScanConfig?
 
-    def initialize(@images : Bool)
+    def initialize(@images : Bool, @pending : ScanConfig? = nil)
       @phase = Phase::Booting
       @mode = "HYDE"
       @field = 0
@@ -87,9 +89,30 @@ module JekyllHyde::View
       Tui::Program.new(app, terminal).run(Scene.setup(app.images?), Scene.teardown(app.images?))
     end
 
-    # Starts the boot animation.
+    # Launches straight into a scan composed on the command line (the power-user
+    # override): the TUI opens on the running dashboard, skipping the opener and
+    # the form. q from the finished dashboard drops to the cockpit to compose
+    # another, and a second q quits. A no-op when the terminal is not
+    # interactive. The session is not built until `init`, so an early return here
+    # never leaves an orphaned scan fiber running.
+    def self.launch(config : ScanConfig, output : IO = STDOUT) : Nil
+      terminal = Tui::Terminal.new(STDIN, output)
+      return unless terminal.interactive?
+      app = new(Render::Graphics.images?, config)
+      Tui::Program.new(app, terminal).run(Scene.setup(app.images?), Scene.teardown(app.images?))
+    end
+
+    # Starts the boot animation, or, for a command-line scan, builds the session
+    # and opens straight on the running dashboard.
     def init : Tui::Cmd?
-      Tui.tick(FRAME)
+      if config = @pending
+        @pending = nil
+        @mode = config.mode
+        @values = Shell.defaults(@mode)
+        start_scan(config)
+      else
+        Tui.tick(FRAME)
+      end
     end
 
     def update(msg : Tui::Msg) : {Tui::Model, Tui::Cmd?}
@@ -318,26 +341,48 @@ module JekyllHyde::View
     # loop.
     private def execute : {Tui::Model, Tui::Cmd?}
       return {self, nil} unless ready?
-      session = ScanSession.new(@values[0], @values[1], concurrency: field_int(3, 40), depth: field_int(4, 4), mode: @mode)
+      {self, start_scan(compose)}
+    end
+
+    # Build the session for *config*, open on the dashboard, and return the
+    # command that streams the first hit. Shared by the Enter launch and the
+    # command-line power-user launch; the caller owns @mode and @values.
+    private def start_scan(config : ScanConfig) : Tui::Cmd
+      session = ScanSession.new(config)
       @session = session
       @scan_at = Time.instant
       @scroll = 0
       @phase = Phase::Scanning
-      {self, session.listen(FRAME)}
+      session.listen(FRAME)
+    end
+
+    # A ScanConfig from the current form, reading each value by its flag (the two
+    # modes' field lists differ at both ends, so fixed indices would misread).
+    # Only Jekyll carries a status matcher and filter.
+    private def compose : ScanConfig
+      state = shell_state
+      config = ScanConfig.new
+      config.mode = @mode
+      config.url = Shell.value(state, "-u")
+      config.wordlists = [Shell.value(state, "-w")]
+      config.extensions = Shell.value(state, "-e").split(',').map(&.strip).reject(&.empty?)
+      config.threads = Shell.value(state, "-t").to_i? || config.threads
+      config.depth = Shell.value(state, "-d").to_i? || config.depth
+      if @mode == "JEKYLL"
+        config.match_status(Shell.value(state, "--mc"))
+        config.filter_status(Shell.value(state, "--fc"))
+      end
+      config
     end
 
     # Whether the mandatory fields are set, delegated to the shell's own check so
     # the launch gate and the READY light cannot drift apart.
     private def ready? : Bool
-      Shell.ready?(Shell::State.new(@mode, @field, @editing, @values, @cursor))
+      Shell.ready?(shell_state)
     end
 
-    # A numeric field's value, or *fallback* when blank or unparsable. The
-    # indices match Shell::ALL in Hyde: 3 is THREADS, 4 is DEPTH. In Jekyll there
-    # is no depth field, but the engine ignores depth, so reading index 4 there
-    # (the MATCH field) is harmless.
-    private def field_int(index : Int32, fallback : Int32) : Int32
-      @values[index]?.try(&.to_i?) || fallback
+    private def shell_state : Shell::State
+      Shell::State.new(@mode, @field, @editing, @values, @cursor)
     end
 
     # A hit from the live session: record it and wait for the next. A hit from a

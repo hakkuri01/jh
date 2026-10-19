@@ -1,6 +1,7 @@
 # Entry point, and the only file under src/ that runs on require. Bare `jh` in a
-# terminal runs the interactive program; with arguments it runs one scan through
-# the one-shot CLI; with no arguments on a pipe it prints the static banner.
+# terminal runs the interactive program; with arguments it parses the command
+# and launches the same program straight onto the running scan dashboard; with
+# no arguments on a pipe it prints the static banner.
 require "./jekyll_hyde/version"
 require "./jekyll_hyde/render/logo"
 require "./jekyll_hyde/render/graphics"

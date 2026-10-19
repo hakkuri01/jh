@@ -12,7 +12,7 @@ module JekyllHyde::Jekyll
       And
     end
 
-    # The default `-mc`: the whole 2xx range, not just 200/204 (an older default).
+    # The default `--mc`: the whole 2xx range, not just 200/204 (an older default).
     DEFAULT_STATUS = "200-299,301,302,307,401,403,405,500"
 
     def initialize(@matchers : Array(Rule), @filters : Array(Rule) = [] of Rule, *, @matcher_mode : Mode = Mode::Or, @filter_mode : Mode = Mode::Or)

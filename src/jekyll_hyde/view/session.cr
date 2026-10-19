@@ -1,10 +1,15 @@
 require "../tui/model"
 require "../tui/message"
 require "../core/response"
+require "../core/results"
 require "../wordlist/list"
 require "../hyde/scan"
 require "../jekyll/scan"
+require "../jekyll/input"
+require "../jekyll/rule"
+require "../jekyll/rules"
 require "../jekyll/template"
+require "../scan_config"
 require "uri"
 
 # The bridge between a running scan engine and the Elm loop.
@@ -46,15 +51,16 @@ module JekyllHyde::View
     end
   end
 
-  # One running scan wired into the Elm loop, Hyde or Jekyll by *mode*. The scan
-  # runs on its own fiber and streams each kept result through a channel; the loop
-  # pulls with `listen`, a select over that channel and a frame timeout, so one
-  # command both streams hits at the UI's pace (backpressure throttles the scan,
-  # not the UI) and keeps a steady clock for the activity pulse. The session keeps
-  # the hits seen and exposes live request and error counts read off the engine. q
-  # cancels: the engine stops within one pool of in-flight requests, the fiber
-  # ends, and the timeout keeps any waiting `listen` from blocking on a silent
-  # channel.
+  # One running scan wired into the Elm loop, built from a ScanConfig so a
+  # form-composed scan and a command-line scan drive the very same engine path.
+  # The scan runs on its own fiber and streams each kept result through a
+  # channel; the loop pulls with `listen`, a select over that channel and a frame
+  # timeout, so one command both streams hits at the UI's pace (backpressure
+  # throttles the scan, not the UI) and keeps a steady clock for the activity
+  # pulse. The session keeps the hits seen and exposes live request and error
+  # counts read off the engine. q cancels: the engine stops within one pool of
+  # in-flight requests, the fiber ends, and the timeout keeps any waiting
+  # `listen` from blocking on a silent channel.
   class ScanSession
     getter hits : Array(Core::Response)
     getter? running : Bool
@@ -64,18 +70,18 @@ module JekyllHyde::View
     @channel : Channel(Tui::Msg)
     @cancelled : Bool
     @paused : Bool
-    @mode : String
+    @config : ScanConfig
     @scan : (Hyde::Scan | Jekyll::Scan)? = nil
 
-    def initialize(@target : String, wordlist_path : String, *, concurrency : Int32, depth : Int32, mode : String = "HYDE")
+    def initialize(@config : ScanConfig)
+      @target = @config.url
       @hits = [] of Core::Response
       @running = true
       @error = nil
       @cancelled = false
       @paused = false
-      @mode = mode
       @channel = Channel(Tui::Msg).new(128)
-      spawn perform(wordlist_path, concurrency, depth)
+      spawn perform
     end
 
     # The command the loop runs to pull the next scan event: the next hit, or a
@@ -132,31 +138,69 @@ module JekyllHyde::View
       @paused
     end
 
-    private def perform(wordlist_path : String, concurrency : Int32, depth : Int32) : Nil
+    private def perform : Nil
       validate_target!
-      scan = build_scan(wordlist_path, concurrency, depth)
+      scan = build_scan
       @scan = scan
-      scan.run(cancel: -> { @cancelled }, pause: -> { @paused }) do |response|
+      results = scan.run(cancel: -> { @cancelled }, pause: -> { @paused }) do |response|
         @channel.send(ScanHitMsg.new(self, response)) unless @cancelled
       end
-      @channel.send(ScanDoneMsg.new(self)) unless @cancelled
+      unless @cancelled
+        export(results)
+        @channel.send(ScanDoneMsg.new(self))
+      end
     rescue ex
       @channel.send(ScanFailedMsg.new(self, ex.message || "scan failed")) unless @cancelled
     end
 
-    # Builds the engine for the mode: Jekyll fuzzes a FUZZ template with a
-    # positional wordlist, Hyde recurses from the origin with a deduplicated
-    # wordlist. Both stream through the same
-    # `run(cancel) { }` the loop drives; the matcher/filter and depth flags are
-    # the engine defaults here, with the full set exposed through the one-shot CLI.
-    private def build_scan(wordlist_path : String, concurrency : Int32, depth : Int32) : Hyde::Scan | Jekyll::Scan
-      if @mode == "JEKYLL"
-        list = Wordlist::List.positional({wordlist_path})
-        Jekyll::Scan.new(Jekyll::Template.new(@target), list, concurrency: concurrency)
-      else
-        list = Wordlist::List.deduplicated({wordlist_path})
-        Hyde::Scan.new(@target, list, concurrency: concurrency, max_depth: depth)
+    # Builds the engine for the mode. Both modes expand the wordlist by any
+    # extensions and stream through the same `run(cancel, pause) { }` the loop
+    # drives. This is the one place a scan is assembled, for the form and the
+    # command line alike.
+    private def build_scan : Hyde::Scan | Jekyll::Scan
+      @config.mode == "JEKYLL" ? build_jekyll : build_hyde
+    end
+
+    # Jekyll: one source per `-w` spec (extensions only on the FUZZ source, as
+    # the keyworded sources carry their own tokens), substituted into the FUZZ
+    # template and kept by the matcher/filter rules.
+    private def build_jekyll : Jekyll::Scan
+      sources = @config.wordlists.map do |spec|
+        path, keyword = Jekyll::Source.split(spec)
+        list = Wordlist::List.positional({path})
+        list = list.with_extensions(@config.extensions) if keyword == Jekyll::Template::KEYWORD
+        Jekyll::Source.new(keyword, list)
       end
+      template = Jekyll::Template.new(@config.url, sources.map(&.keyword))
+      input = Jekyll::Input.new(sources, @config.input_mode)
+      Jekyll::Scan.new(template, input, concurrency: @config.threads, rules: jekyll_rules, auto_calibrate: @config.calibrate?)
+    end
+
+    # Hyde: recurse from the origin with one deduplicated wordlist; --no-recursion
+    # caps the walk at the target itself.
+    private def build_hyde : Hyde::Scan
+      paths = @config.wordlists.map { |spec| Jekyll::Source.split(spec)[0] }
+      list = Wordlist::List.deduplicated(paths).with_extensions(@config.extensions)
+      depth = @config.no_recursion? ? 1 : @config.depth
+      Hyde::Scan.new(@config.url, list, concurrency: @config.threads, max_depth: depth, auto_tune: @config.auto_tune?)
+    end
+
+    # The rules from the parsed matchers and filters; with no matcher given, the
+    # default status matcher stands in so a bare scan still keeps real hits.
+    private def jekyll_rules : Jekyll::Rules
+      matchers = @config.matchers.empty? ? [Jekyll::Rule.build("status", Jekyll::Rules::DEFAULT_STATUS)] : @config.matchers
+      Jekyll::Rules.new(matchers, @config.filters, matcher_mode: @config.matcher_mode, filter_mode: @config.filter_mode)
+    end
+
+    # Write the results to the -o path when one is set and the scan finished on
+    # its own. A finished run's hits are already on the dashboard, so a bad path
+    # is not worth tearing it down for.
+    private def export(results : Core::Results) : Nil
+      path = @config.output
+      return unless path
+      File.write(path, @config.format == "csv" ? results.to_csv : results.to_json)
+    rescue IO::Error
+      # the results are already on screen; a failed file write is not fatal
     end
 
     # Validate the operator-supplied target before any request fiber starts, so a

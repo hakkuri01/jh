@@ -1,36 +1,20 @@
 require "option_parser"
-require "./version"
-require "./render/logo"
-require "./render/sanitize"
-require "./core/results"
-require "./wordlist/list"
-require "./http/client"
-require "./hyde/scan"
-require "./jekyll/scan"
-require "./jekyll/template"
+require "./scan_config"
+require "./view/app"
+require "./jekyll/rule"
 require "./jekyll/rules"
+require "./jekyll/input"
 
 module JekyllHyde
-  # The one-shot CLI: parse argv, print the static banner, run a single scan with
-  # each kept result streamed inline, then a summary, with optional export. No
-  # opener, no mode switch, no full-screen TUI; the complement to the interactive
-  # shell. `run` returns the process exit code.
+  # The command-line front door. jh is always the interactive program: with no
+  # arguments it opens the composer; with a full command it parses and validates
+  # the flags here, then launches the same TUI straight onto the running scan
+  # dashboard (the power-user override), skipping the opener and the form. There
+  # is no headless runner, so there is no second code path to keep in step: the
+  # TUI is the program, and a command line is just a pre-filled scan. A parse or
+  # validation problem prints one actionable line and exits non-zero before
+  # anything launches. `run` returns the process exit code.
   class Entry
-    # The parsed invocation. match/filter are Jekyll status rules; output/format
-    # drive export.
-    record Config,
-      mode : String,
-      url : String,
-      wordlist : String,
-      threads : Int32,
-      depth : Int32,
-      match : String?,
-      filter : String?,
-      calibrate : Bool,
-      output : String?,
-      format : String,
-      help : Bool
-
     def self.run(argv : Array(String), io : IO = STDOUT) : Int32
       new(io).run(argv)
     end
@@ -39,8 +23,8 @@ module JekyllHyde
     end
 
     def run(argv : Array(String)) : Int32
-      parser, config = parse(argv)
-      if config.help
+      parser, config, help = parse(argv)
+      if help
         @io.puts parser
         return 0
       end
@@ -48,90 +32,138 @@ module JekyllHyde
         @io.puts "error: #{problem}"
         return 2
       end
-      banner
-      report = perform(config)
-      summary(report)
-      export(report, config)
+      unless @io.tty?
+        @io.puts "error: jh runs in an interactive terminal; give it no arguments to compose a scan, or a full command to run one"
+        return 2
+      end
+      View::App.launch(config, @io)
       0
-    rescue ex : IO::Error | ArgumentError | Http::Error
+    rescue ex : ArgumentError
       @io.puts "error: #{ex.message}"
       2
     end
 
-    private def parse(argv : Array(String)) : {OptionParser, Config}
-      mode, url, wordlist, threads, depth = "HYDE", "", "", 40, 4
-      match, filter, output = nil.as(String?), nil.as(String?), nil.as(String?)
-      calibrate, help, format = false, false, "json"
+    # Parse argv into a config, the chosen mode and every flag folded in as the
+    # handlers fire. Returns the parser (for the help text), the config, and
+    # whether help was asked. Raises ArgumentError on an unknown option or a
+    # malformed flag value, caught by `run`.
+    def parse(argv : Array(String)) : {OptionParser, ScanConfig, Bool}
+      config = ScanConfig.new
+      help = false
       parser = OptionParser.new do |p|
-        p.banner = "usage: jh [--hyde|--jekyll] -u URL -w WORDLIST [options]"
-        p.on("--hyde", "recursive discovery (default)") { mode = "HYDE" }
-        p.on("--jekyll", "templated FUZZ fuzzing") { mode = "JEKYLL" }
-        p.on("-u URL", "--url=URL", "target URL (FUZZ marks the Jekyll injection point)") { |v| url = v }
-        p.on("-w FILE", "--wordlist=FILE", "wordlist path") { |v| wordlist = v }
-        p.on("-t N", "--threads=N", "concurrent requests (default 40)") { |v| threads = v.to_i? || threads }
-        p.on("-d N", "--depth=N", "max recursion depth, Hyde (default 4)") { |v| depth = v.to_i? || depth }
-        p.on("--match=CODES", "match status codes, Jekyll (e.g. 200,301,403)") { |v| match = v }
-        p.on("--filter=CODES", "filter status codes, Jekyll") { |v| filter = v }
-        p.on("--calibrate", "autocalibrate wildcard filters, Jekyll") { calibrate = true }
-        p.on("-o FILE", "--output=FILE", "write results to FILE") { |v| output = v }
-        p.on("--format=FMT", "export format: json or csv (default json)") { |v| format = v }
+        p.banner = "usage: jh [--hyde | --jekyll] -u URL -w WORDLIST [options]"
+        common_flags(p, config)
+        jekyll_flags(p, config)
+        hyde_flags(p, config)
         p.on("-h", "--help", "show this help") { help = true }
         p.invalid_option { |flag| raise ArgumentError.new("unknown option #{flag}") }
       end
       parser.parse(argv)
-      {parser, Config.new(mode, url, wordlist, threads, depth, match, filter, calibrate, output, format, help)}
+      {parser, config, help}
     end
 
-    private def validate(config : Config) : String?
-      return "a target URL is required (-u)" if config.url.empty?
-      return "a wordlist is required (-w)" if config.wordlist.empty?
-      return "Jekyll needs a FUZZ keyword in the URL (-u)" if config.mode == "JEKYLL" && !config.url.includes?("FUZZ")
-      return "export format must be json or csv" if config.output && config.format != "json" && config.format != "csv"
-      nil
+    # Flags shared by both modes.
+    private def common_flags(p : OptionParser, c : ScanConfig) : Nil
+      p.on("--hyde", "recursive discovery") { c.mode = "HYDE"; c.mode_set = true }
+      p.on("--jekyll", "templated FUZZ fuzzing") { c.mode = "JEKYLL"; c.mode_set = true }
+      p.on("-u URL", "--url=URL", "target URL (FUZZ marks the Jekyll injection point)") { |v| c.url = v }
+      p.on("-w FILE", "--wordlist=FILE", "wordlist path (repeatable; FILE:KEYWORD for Jekyll input)") { |v| c.wordlists << v }
+      p.on("-e LIST", "--extensions=LIST", "extensions to append, e.g. php,html") { |v| c.extensions = v.split(',').map(&.strip).reject(&.empty?) }
+      p.on("-t N", "--threads=N", "concurrent requests (default 40)") { |v| c.threads = v.to_i? || c.threads }
+      p.on("-o FILE", "--output=FILE", "write results to FILE on completion") { |v| c.output = v }
+      p.on("--format FMT", "export format: json or csv (default json)") { |v| c.format = v }
     end
 
-    # One scan in the chosen mode, each kept result streamed inline as it lands.
-    private def perform(config : Config) : Report
-      if config.mode == "JEKYLL"
-        list = Wordlist::List.positional({config.wordlist})
-        scan = Jekyll::Scan.new(Jekyll::Template.new(config.url), list, concurrency: config.threads, rules: rules(config), auto_calibrate: config.calibrate)
-        Report.new(scan.run { |response| row(response) }, scan.completed, scan.errors)
-      else
-        list = Wordlist::List.deduplicated({config.wordlist})
-        scan = Hyde::Scan.new(config.url, list, concurrency: config.threads, max_depth: config.depth)
-        Report.new(scan.run { |response| row(response) }, scan.completed, scan.errors)
+    # Jekyll's matcher/filter grammar (one letter per metric), the combination
+    # modes, the input mode, and autocalibration.
+    private def jekyll_flags(p : OptionParser, c : ScanConfig) : Nil
+      metric_rule(p, c, "c", "status")
+      metric_rule(p, c, "s", "size")
+      metric_rule(p, c, "w", "word")
+      metric_rule(p, c, "l", "line")
+      metric_rule(p, c, "r", "regex")
+      metric_rule(p, c, "t", "time")
+      p.on("--mmode MODE", "matcher mode: and or or (Jekyll)") do |v|
+        c.matcher_mode = Jekyll::Rules::Mode.parse(v)
+        c.jekyll_used = true
+      end
+      p.on("--fmode MODE", "filter mode: and or or (Jekyll)") do |v|
+        c.filter_mode = Jekyll::Rules::Mode.parse(v)
+        c.jekyll_used = true
+      end
+      p.on("--mode MODE", "input mode: clusterbomb or pitchfork (Jekyll)") do |v|
+        c.input_mode = Jekyll::Input::Mode.parse(v)
+        c.jekyll_used = true
+      end
+      p.on("--ac", "autocalibrate wildcard filters (Jekyll)") do
+        c.calibrate = true
+        c.jekyll_used = true
       end
     end
 
-    private def rules(config : Config) : Jekyll::Rules
-      matchers = [Jekyll::Rule.build("status", config.match || Jekyll::Rules::DEFAULT_STATUS)]
-      filters = (value = config.filter) ? [Jekyll::Rule.build("status", value)] : [] of Jekyll::Rule
-      Jekyll::Rules.new(matchers, filters)
+    # Register the `--m<letter>` matcher and `--f<letter>` filter for one metric.
+    private def metric_rule(p : OptionParser, c : ScanConfig, letter : String, type : String) : Nil
+      p.on("--m#{letter} VALUE", "match #{type} (Jekyll)") do |v|
+        c.matchers << Jekyll::Rule.build(type, v)
+        c.jekyll_used = true
+      end
+      p.on("--f#{letter} VALUE", "filter #{type} (Jekyll)") do |v|
+        c.filters << Jekyll::Rule.build(type, v)
+        c.jekyll_used = true
+      end
     end
 
-    # One result line; the url is server-derivable (Hyde mines links), so it is
-    # sanitized before it reaches the terminal (AGENTS: untrusted output).
-    private def row(response : Core::Response) : Nil
-      @io.puts "  %-3d  %9d  %6dw  %6dl  %s" % [response.status, response.size, response.words, response.lines, Render.sanitize(response.url)]
+    # Hyde's depth bound and opt-in behaviors.
+    private def hyde_flags(p : OptionParser, c : ScanConfig) : Nil
+      p.on("-d N", "--depth=N", "max recursion depth (default 4, Hyde)") { |v| c.depth = v.to_i? || c.depth }
+      p.on("--no-recursion", "scan only the target, no descent (Hyde)") do
+        c.no_recursion = true
+        c.hyde_used = true
+      end
+      p.on("--auto-tune", "back off concurrency on 429/403 floods (Hyde)") do
+        c.auto_tune = true
+        c.hyde_used = true
+      end
     end
 
-    private def summary(report : Report) : Nil
-      @io.puts ""
-      @io.puts "#{report.results.entries.size} results · #{report.requests} requests · #{report.errors} errors"
+    # Whether the parsed command is runnable. A mode is mandatory here: a command
+    # launches straight into the scan, so it must say which engine. Mode-specific
+    # flags used against the wrong engine are rejected rather than silently
+    # ignored.
+    private def validate(c : ScanConfig) : String?
+      return "pick a mode: --hyde or --jekyll" unless c.mode_set?
+      return "a target URL is required (-u)" if c.url.empty?
+      return "a wordlist is required (-w)" if c.wordlists.empty?
+      wrong_mode_flag(c) || missing_fuzz(c) || bad_format(c)
     end
 
-    private def export(report : Report, config : Config) : Nil
-      path = config.output
-      return unless path
-      File.write(path, config.format == "csv" ? report.results.to_csv : report.results.to_json)
-      @io.puts "wrote #{report.results.entries.size} results to #{path} (#{config.format})"
+    # A mode-specific flag used against the other engine.
+    private def wrong_mode_flag(c : ScanConfig) : String?
+      return "the matcher, filter, and input flags are Jekyll-only (use --jekyll)" if c.mode == "HYDE" && c.jekyll_used?
+      return "--no-recursion and --auto-tune are Hyde-only (use --hyde)" if c.mode == "JEKYLL" && c.hyde_used?
+      nil
     end
 
-    private def banner : Nil
-      @io.puts Render::Logo.banner(false)
+    # A Jekyll command whose URL is missing a bound keyword.
+    private def missing_fuzz(c : ScanConfig) : String?
+      return nil unless c.mode == "JEKYLL"
+      if missing = missing_keyword(c)
+        "Jekyll needs the #{missing} keyword in the URL (-u)"
+      end
     end
 
-    # The finished scan: its results and the request/error tallies for the summary.
-    private record Report, results : Core::Results, requests : Int32, errors : Int32
+    private def bad_format(c : ScanConfig) : String?
+      return "export format must be json or csv" if c.output && c.format != "json" && c.format != "csv"
+      nil
+    end
+
+    # The first bound keyword absent from the URL, or nil when all are present.
+    private def missing_keyword(c : ScanConfig) : String?
+      c.wordlists.each do |spec|
+        keyword = Jekyll::Source.split(spec)[1]
+        return keyword unless c.url.includes?(keyword)
+      end
+      nil
+    end
   end
 end

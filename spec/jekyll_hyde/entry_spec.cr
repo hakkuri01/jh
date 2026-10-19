@@ -1,65 +1,38 @@
 require "../spec_helper"
-require "../support/fixture_server"
 require "../../src/jekyll_hyde/entry"
 
-private def wordlist_file(*words : String) : String
-  file = File.tempfile("jh_wl")
-  words.each { |word| file.puts(word) }
-  file.close
-  file.path
+# Parse argv and return the config, bypassing the launch (which needs a tty).
+private def config_for(argv : Array(String)) : JekyllHyde::ScanConfig
+  JekyllHyde::Entry.new(IO::Memory.new).parse(argv)[1]
 end
 
+# jh is always the interactive program; Entry only parses and validates a
+# command, then launches the TUI. These specs cover that front door: the help
+# text, the config it builds, and the errors it refuses to launch on. The actual
+# scan execution lives in the session and app specs.
 describe JekyllHyde::Entry do
-  it "runs a Jekyll scan, streams a hit, and prints a summary" do
-    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
-    path = wordlist_file("admin", "missing")
+  it "prints help and exits zero" do
     io = IO::Memory.new
-    begin
-      code = JekyllHyde::Entry.run(["--jekyll", "-u", "#{server.base}/FUZZ", "-w", path, "-t", "4"], io)
-      code.should eq(0)
-      out = io.to_s
-      out.should contain("/admin")    # the kept result row
-      out.should contain("1 results") # the summary
-    ensure
-      server.stop
-      File.delete(path)
-    end
+    JekyllHyde::Entry.run(["--help"], io).should eq(0)
+    io.to_s.should contain("usage: jh")
   end
 
-  it "runs a Hyde scan from the origin" do
-    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
-    path = wordlist_file("admin", "missing")
+  it "requires a mode, since a command launches straight into the scan" do
     io = IO::Memory.new
-    begin
-      JekyllHyde::Entry.run(["-u", server.base, "-w", path, "-t", "4"], io).should eq(0)
-      io.to_s.should contain("/admin")
-    ensure
-      server.stop
-      File.delete(path)
-    end
+    JekyllHyde::Entry.run(["-u", "http://host/", "-w", "x"], io).should eq(2)
+    io.to_s.should contain("pick a mode")
   end
 
-  it "exports results to a CSV file" do
-    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
-    path = wordlist_file("admin")
-    outfile = File.tempfile("jh_out")
-    outfile.close
+  it "errors without a target" do
     io = IO::Memory.new
-    begin
-      JekyllHyde::Entry.run(["--jekyll", "-u", "#{server.base}/FUZZ", "-w", path, "-o", outfile.path, "--format", "csv"], io).should eq(0)
-      File.read(outfile.path).should contain("/admin")
-      io.to_s.should contain("wrote 1 results")
-    ensure
-      server.stop
-      File.delete(path)
-      File.delete(outfile.path)
-    end
-  end
-
-  it "errors without a target or wordlist" do
-    io = IO::Memory.new
-    JekyllHyde::Entry.run(["-w", "x"], io).should eq(2)
+    JekyllHyde::Entry.run(["--hyde", "-w", "x"], io).should eq(2)
     io.to_s.should contain("target URL is required")
+  end
+
+  it "errors without a wordlist" do
+    io = IO::Memory.new
+    JekyllHyde::Entry.run(["--hyde", "-u", "http://host/"], io).should eq(2)
+    io.to_s.should contain("wordlist is required")
   end
 
   it "errors when Jekyll has no FUZZ keyword" do
@@ -70,13 +43,53 @@ describe JekyllHyde::Entry do
 
   it "errors on an unknown option" do
     io = IO::Memory.new
-    JekyllHyde::Entry.run(["--bogus"], io).should eq(2)
+    JekyllHyde::Entry.run(["--hyde", "--bogus"], io).should eq(2)
     io.to_s.should contain("unknown option")
   end
 
-  it "prints help and exits zero" do
+  it "rejects a Jekyll-only flag in Hyde mode" do
     io = IO::Memory.new
-    JekyllHyde::Entry.run(["--help"], io).should eq(0)
-    io.to_s.should contain("usage: jh")
+    JekyllHyde::Entry.run(["--hyde", "-u", "http://host/", "-w", "x", "--mc", "200"], io).should eq(2)
+    io.to_s.should contain("Jekyll-only")
+  end
+
+  it "rejects a Hyde-only flag in Jekyll mode" do
+    io = IO::Memory.new
+    JekyllHyde::Entry.run(["--jekyll", "-u", "http://host/FUZZ", "-w", "x", "--auto-tune"], io).should eq(2)
+    io.to_s.should contain("Hyde-only")
+  end
+
+  it "rejects an export format that is not json or csv" do
+    io = IO::Memory.new
+    JekyllHyde::Entry.run(["--hyde", "-u", "http://host/", "-w", "x", "-o", "out.txt", "--format", "xml"], io).should eq(2)
+    io.to_s.should contain("json or csv")
+  end
+
+  it "refuses to launch outside an interactive terminal" do
+    io = IO::Memory.new # an IO::Memory is not a tty
+    JekyllHyde::Entry.run(["--hyde", "-u", "http://host/", "-w", "x"], io).should eq(2)
+    io.to_s.should contain("interactive terminal")
+  end
+
+  it "parses a Jekyll command with a status matcher into a config" do
+    config = config_for(["--jekyll", "-u", "http://host/FUZZ", "-w", "words.txt", "--mc", "200", "-t", "7"])
+    config.mode.should eq("JEKYLL")
+    config.url.should eq("http://host/FUZZ")
+    config.wordlists.should eq(["words.txt"])
+    config.threads.should eq(7)
+    config.matchers.size.should eq(1)
+  end
+
+  it "parses Hyde extensions and the depth bound into a config" do
+    config = config_for(["--hyde", "-u", "http://host/", "-w", "words.txt", "-e", "php,html", "-d", "2"])
+    config.mode.should eq("HYDE")
+    config.extensions.should eq(["php", "html"])
+    config.depth.should eq(2)
+  end
+
+  it "parses a clusterbomb of keyworded wordlists into a config" do
+    config = config_for(["--jekyll", "-u", "http://host/FUZZ/FUZ2Z", "-w", "a:FUZZ", "-w", "b:FUZ2Z", "--mode", "pitchfork"])
+    config.wordlists.should eq(["a:FUZZ", "b:FUZ2Z"])
+    config.input_mode.should eq(JekyllHyde::Jekyll::Input::Mode::Pitchfork)
   end
 end

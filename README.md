@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="assets/jh.png" alt="Jekyll // Hyde" width="100%">
+  <img src="assets/jh.png" alt="Jekyll // Hyde" width="300">
 </p>
 
 <p align="center">
-<img src="https://img.shields.io/badge/Crystal-black.svg?style=plastic&logo=crystal&logoColor=red">
-<img src="https://img.shields.io/badge/v0.1.0-black.svg?style=plastic&logo=git&logoColor=red">
-<img src="https://img.shields.io/badge/Bug%20Bounty-black.svg?style=plastic&logo=owasp&logoColor=red">
+<img src="https://img.shields.io/badge/Crystal-black.svg?style=plastic&logo=crystal&logoColor=white">
+<img src="https://img.shields.io/badge/v0.1.0-B060E8.svg?style=plastic&logo=git&logoColor=white">
+<img src="https://img.shields.io/badge/Bug%20Bounty-F03048.svg?style=plastic&logo=owasp&logoColor=white">
 </p>
 
 Jekyll // Hyde is a single-binary interactive TUI web fuzzer with two personalities in one shell. Two tools defined the two ways people fuzz the web, and jh gives each one a mode: Hyde takes after [feroxbuster](https://github.com/epi052/feroxbuster), the broad, recursive, auto-tuning discovery you reach for to open a target, and Jekyll takes after [ffuf](https://github.com/ffuf/ffuf), the precise, templated `FUZZ` fuzzing you reach for once you know what you're looking for. jh marries those two personalities into one cohesive, keystroke-switchable TUI fuzzer, so a single session carries a target from broad discovery into focused follow-on work without switching back and forth between two separate tools.
@@ -19,7 +19,7 @@ Jekyll // Hyde is a single-binary interactive TUI web fuzzer with two personalit
 ## Architecture
 
 - **One binary, zero runtime dependencies.** Crystal 1.21.1, standard library only; the Elm-architecture TUI runtime is built in-house.
-- **Interactive by design.** The binary launches into the full-screen TUI. A one-shot CLI (`jh` with arguments) runs a single scan and exits, for scripting and piping.
+- **Interactive by design.** The binary always launches the full-screen TUI; there is no headless mode. With no arguments it opens the composer; given a full command it launches straight onto the running scan dashboard (the power-user override), skipping the opener and the form.
 - **Hostile-target safe.** Every response is sanitized before it reaches the terminal, bodies are size-capped, redirect and link targets are validated before they are followed, and supplied headers and cookies are never written to results.
 
 ### Modes
@@ -64,43 +64,65 @@ just verify                  # the gate
 
 ## Usage
 
-`jh` launches the interactive shell. With arguments, it runs a single scan and exits:
+`jh` with no arguments opens the composer. Give it a full command and it launches straight onto the running scan dashboard, skipping the opener and the form, so a one-off scan is one line. There is no headless runner: jh is always the TUI, so a command needs an interactive terminal and must name a mode (`--hyde` or `--jekyll`), since it runs at once. Multi-character flags are double-dashed (Crystal's option style); single letters stay short; the interactive `h` page lists them all.
 
 ```bash
-usage: jh [--hyde|--jekyll] -u URL -w WORDLIST [options]
-    --hyde                      recursive discovery (default)
-    --jekyll                    templated FUZZ fuzzing
-    -u URL, --url=URL           target URL (FUZZ marks the Jekyll injection point)
-    -w FILE, --wordlist=FILE    wordlist path
-    -t N, --threads=N           concurrent requests (default 40)
-    -d N, --depth=N             max recursion depth, Hyde (default 4)
-    --match=CODES               match status codes, Jekyll (e.g. 200,301,403)
-    --filter=CODES              filter status codes, Jekyll
-    --calibrate                 autocalibrate wildcard filters, Jekyll
-    -o FILE, --output=FILE      write results to FILE
-    --format=FMT                export format: json or csv (default json)
-    -h, --help                  show this help
+jh [--hyde | --jekyll] -u URL -w WORDLIST [options]
 ```
+
+Common to both modes:
+
+| Flag | Meaning |
+| --- | --- |
+| `-u URL` | target URL (`FUZZ` marks the Jekyll injection point) |
+| `-w FILE` | wordlist path (repeatable; `FILE:KEYWORD` binds a Jekyll input keyword) |
+| `-e LIST` | extensions to append to words, e.g. `php,html` |
+| `-t N` | concurrent requests (default 40) |
+| `-o FILE`, `--format json\|csv` | write results to a file when the scan finishes |
+| `-h` | show this help |
+
+Hyde (recursive discovery):
+
+| Flag | Meaning |
+| --- | --- |
+| `-d N` | max recursion depth (default 4) |
+| `--no-recursion` | scan only the target, no descent |
+| `--auto-tune` | back off concurrency under 429 / 403 floods |
+
+Jekyll (templated fuzzing):
+
+| Flag | Meaning |
+| --- | --- |
+| `FUZZ` | injection keyword, required somewhere in `-u` |
+| `--mc --fc` | match / filter by status code |
+| `--ms --fs` | match / filter by response size |
+| `--mw --fw` | match / filter by word count |
+| `--ml --fl` | match / filter by line count |
+| `--mr --fr` | match / filter by regex (headers + body) |
+| `--mt --ft` | match / filter by response time |
+| `--mmode --fmode` | how matchers / filters combine: `and` or `or` (default `or`) |
+| `--mode` | multi-wordlist input: `clusterbomb` or `pitchfork` |
+| `--ac` | auto-calibrate wildcard filters before the run |
 
 ### Examples
 
 ```bash
-# Recursive discovery (Hyde, the default)
-jh -u https://example.com -w wordlist.txt
+# Recursive discovery (Hyde)
+jh --hyde -u https://example.com -w wordlist.txt
 
-# Deeper recursion with more concurrency
-jh --hyde -u https://example.com -w wordlist.txt -d 6 -t 80
+# Deeper recursion, more concurrency, with auto-tune
+jh --hyde -u https://example.com -w wordlist.txt -d 6 -t 80 --auto-tune
 
-# Templated fuzzing (Jekyll): FUZZ marks the injection point
-jh --jekyll -u https://example.com/FUZZ -w wordlist.txt --match 200,301,403
+# Templated fuzzing (Jekyll): match 200/301/403, drop a 1234-byte wildcard
+jh --jekyll -u https://example.com/FUZZ -w wordlist.txt --mc 200,301,403 --fs 1234
 
-# Jekyll with autocalibration and a CSV export
-jh --jekyll -u https://example.com/FUZZ -w wordlist.txt --calibrate -o results.csv --format csv
+# Two wordlists in a clusterbomb, regex matcher, CSV export
+jh --jekyll -u https://example.com/FUZZ/FUZ2Z -w words.txt:FUZZ -w vals.txt:FUZ2Z --mode clusterbomb --mr admin -o out.csv --format csv
 ```
 
 ### Interactive Dashboard
 
-`jh` (optionally with scan flags to prefill the form) launches the full-screen app.
+`jh` with no arguments launches the full-screen app and walks through the steps below. A full command skips straight to step 3, the running dashboard.
 
 1. An opening screen plays the boot sequence. Press any key to continue.
 2. A vim-style command form collects the target, the wordlist, and the option switches, building a live `jh …` command at the foot.
@@ -116,19 +138,18 @@ jh --jekyll -u https://example.com/FUZZ -w wordlist.txt --calibrate -o results.c
 | Form (NORMAL) | `enter` | Run the scan |
 | Form (NORMAL) | `q` | Quit |
 | Form (INSERT) | type, `←`/`→`, `home`/`end` | Edit; `enter` runs, `esc` returns to NORMAL |
-| Dashboard | `j`/`k`, `pgup`/`pgdn`, `g`/`G` | Scroll the results |
+| Dashboard | `j`/`k`, `pgup`/`pgdn`, `home`/`end` | Scroll the results |
 | Dashboard | `p` | Pause / resume the scan |
-| Dashboard | `esc` | Cancel the scan |
-| Dashboard | `q` | Back to the form |
+| Dashboard | `q` | Stop the scan, back to the form |
 | Anywhere | `ctrl+c` | Quit |
 
-A bare drag selects and copies text, and the wheel scrolls; the app does not capture the mouse. A piped or redirected run prints the one-shot line output instead of opening the app.
+A bare drag selects and copies text, and the wheel scrolls; the app does not capture the mouse. `esc` never cancels a running scan or drops a view by reflex; `q` is the one that steps back. A piped or redirected run has no terminal to draw into, so jh prints an error instead of opening; run it in a terminal.
 
 ---
 
 ## Output
 
-Results are not written to disk by default. Pass `-o FILE` to export them as JSON (the default) or CSV with `--format csv`. Supplied request headers and cookies are never written to an export.
+Results are not written to disk by default. Pass `-o FILE` to write them, when the scan finishes, as JSON (the default) or CSV with `--format csv`. Supplied request headers and cookies are never written to an export.
 
 ---
 
@@ -139,3 +160,4 @@ Default scans are complete in both modes. These are the opt-in paths jh will gro
 - **Mid-run scan control.** A scan already pauses, resumes, and cancels. Next is running several at once from the dashboard: add a target without stopping the others, cancel a single scan, add or remove a filter mid-run, and raise or lower the concurrency limit while a scan is live.
 - **Explicit near-duplicate filtering.** Hyde already drops soft-404 near-duplicates by default. The next step is an explicit switch that filters every response against a reference page you supply, for targets whose noise does not look like a 404.
 - **Custom and per-host calibration.** Jekyll runs one built-in calibration strategy today. Next: supply your own calibration probes and strategy, and calibrate each host separately once a single run can target more than one origin.
+- **HTTP/2.** jh speaks HTTP/1.1 today. Negotiating HTTP/2 over TLS is the modern fuzzing-tool standard, and a target that answers differently over HTTP/2 than over HTTP/1.1 is a parity gap: small enough to be a non-issue on the large majority of scans, but real. The plan, if we take it on, is transparent HTTP/2 in Hyde (negotiated when the target offers it, falling back to HTTP/1.1) and opt-in in Jekyll behind an `--http2` flag, default off, so precise fuzzing stays exactly as composed. It is substantial work, since Crystal's standard library has no HTTP/2 client: we would either lean on a maturing community shard such as [ysbaddaden/http2](https://github.com/ysbaddaden/http2) if it keeps progressing, or hand-roll our own as [Gori](https://github.com/hahwul/gori) does. Either way it is tabled until we choose to build it, or until the language ecosystem closes the gap first.

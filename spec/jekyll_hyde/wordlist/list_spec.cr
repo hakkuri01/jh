@@ -99,4 +99,19 @@ describe JekyllHyde::Wordlist::List do
       list.size.should eq(2)
     end
   end
+
+  describe "#with_extensions" do
+    it "appends each extension to every entry, keeping the bare word" do
+      list = JekyllHyde::Wordlist::List.new(["admin", "index"]).with_extensions(["php", "html"])
+      list.entries.should eq(["admin", "admin.php", "admin.html", "index", "index.php", "index.html"])
+    end
+
+    it "treats a leading dot on an extension as optional" do
+      JekyllHyde::Wordlist::List.new(["a"]).with_extensions([".php"]).entries.should eq(["a", "a.php"])
+    end
+
+    it "is a no-op with no extensions" do
+      JekyllHyde::Wordlist::List.new(["a", "b"]).with_extensions([] of String).entries.should eq(["a", "b"])
+    end
+  end
 end

@@ -50,6 +50,19 @@ module JekyllHyde::Wordlist
       @entries.empty?
     end
 
+    # A copy with each entry followed by its extension variants: "admin" with
+    # ["php", "html"] yields "admin", "admin.php", "admin.html". A leading dot on
+    # an extension is optional. The bare word is always kept.
+    def with_extensions(extensions : Array(String)) : List
+      return self if extensions.empty?
+      expanded = Array(String).new(@entries.size * (extensions.size + 1))
+      @entries.each do |entry|
+        expanded << entry
+        extensions.each { |ext| expanded << "#{entry}.#{ext.lstrip('.')}" }
+      end
+      List.new(expanded)
+    end
+
     # Entries containing *query* case-insensitively: the TUI wordlist find. One
     # O(W) pass; an empty query returns a copy of every entry.
     def find(query : String) : Array(String)

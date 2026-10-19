@@ -34,7 +34,9 @@ module JekyllHyde::View
 
     # One composable scan option. step is the value a Number field's meter adds
     # per filled notch; group is the section it sits under; hyde_only keeps the
-    # recursion-depth field out of Jekyll.
+    # recursion-depth field out of Jekyll, and jekyll_only keeps the status
+    # matcher and filter out of Hyde (which has no matcher grammar). The two
+    # modes' field lists diverge at both ends because of these.
     record Field,
       label : String,
       flag : String,
@@ -44,18 +46,21 @@ module JekyllHyde::View
       step : Int32,
       required : Bool,
       group : String,
-      hyde_only : Bool
+      hyde_only : Bool,
+      jekyll_only : Bool
 
     # Every field, in order. Target and wordlist are mandatory; the rest are
-    # optional.
+    # optional. The flags are the exact CLI flags, so the composed `jh …` line is
+    # a runnable command (multi-character flags are double-dashed, Crystal's
+    # option style).
     ALL = [
-      Field.new("URL", "-u", Kind::Text, "", "https://target", 0, true, "TARGET", false),
-      Field.new("WORDLIST", "-w", Kind::Text, "", "wordlist.txt", 0, true, "TARGET", false),
-      Field.new("EXTENSIONS", "-e", Kind::Text, "", "php,html,txt", 0, false, "TARGET", false),
-      Field.new("THREADS", "-t", Kind::Number, "40", "40", 10, false, "ENGINE", false),
-      Field.new("DEPTH", "-d", Kind::Number, "4", "4", 1, false, "ENGINE", true),
-      Field.new("MATCH", "-mc", Kind::Text, "", "200,301,403", 0, false, "MATCHING", false),
-      Field.new("FILTER", "-fc", Kind::Text, "", "size:0", 0, false, "MATCHING", false),
+      Field.new("URL", "-u", Kind::Text, "", "https://target", 0, true, "TARGET", false, false),
+      Field.new("WORDLIST", "-w", Kind::Text, "", "wordlist.txt", 0, true, "TARGET", false, false),
+      Field.new("EXTENSIONS", "-e", Kind::Text, "", "php,html,txt", 0, false, "TARGET", false, false),
+      Field.new("THREADS", "-t", Kind::Number, "40", "40", 10, false, "ENGINE", false, false),
+      Field.new("DEPTH", "-d", Kind::Number, "4", "4", 1, false, "ENGINE", true, false),
+      Field.new("MATCH", "--mc", Kind::Text, "", "200,301,403", 0, false, "MATCHING", false, true),
+      Field.new("FILTER", "--fc", Kind::Text, "", "404,500", 0, false, "MATCHING", false, true),
     ]
 
     # The widest label, so the wells line up.
@@ -73,9 +78,22 @@ module JekyllHyde::View
       dividers : Array(Tuple(Int32, String)),
       command : Int32
 
-    # The fields shown in *mode*: Hyde adds recursion depth, Jekyll drops it.
+    # The fields shown in *mode*: Hyde adds recursion depth and drops the status
+    # matcher/filter, Jekyll does the reverse.
     def fields(mode : String) : Array(Field)
-      mode == "HYDE" ? ALL : ALL.reject(&.hyde_only)
+      ALL.reject { |field| mode == "HYDE" ? field.jekyll_only : field.hyde_only }
+    end
+
+    # The value of the field carrying *flag* in *state*, or "" when that flag has
+    # no field in the current mode. Reads are by flag, not index, because the two
+    # modes' field lists differ at both ends.
+    def value(state : State, flag : String) : String
+      fs = fields(state.mode)
+      if index = fs.index { |field| field.flag == flag }
+        state.values[index]
+      else
+        ""
+      end
     end
 
     # A mode's starting values (the engine swap resets to these).

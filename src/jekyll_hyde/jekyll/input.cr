@@ -1,9 +1,22 @@
 require "../wordlist/list"
+require "./template"
 
 module JekyllHyde::Jekyll
   # One `-w list:KEYWORD` pairing: the keyword the template carries and the
   # wordlist that fills it.
-  record Source, keyword : String, list : Wordlist::List
+  record Source, keyword : String, list : Wordlist::List do
+    # Split a "-w" spec into its wordlist path and keyword: "path:KEYWORD" keeps
+    # the keyword, a bare "path" defaults to FUZZ. The last colon splits, so a
+    # scheme or drive colon earlier in the path is preserved; a leading colon
+    # (idx 0) is not a separator. Hyde takes the path and ignores the keyword.
+    def self.split(spec : String) : {String, String}
+      if (idx = spec.rindex(':')) && idx > 0
+        {spec[0...idx], spec[(idx + 1)..]}
+      else
+        {spec, Template::KEYWORD}
+      end
+    end
+  end
 
   # Multi-wordlist input modes over one or more keyword/wordlist sources.
   # Clusterbomb walks every combination with the first source varying fastest (an

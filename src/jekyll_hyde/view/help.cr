@@ -28,8 +28,8 @@ module JekyllHyde::View
       {"-w", "wordlist path"},
       {"-e", "extensions (php,html,…)"},
       {"-t", "concurrent threads"},
-      {"-mc", "match status codes"},
-      {"-fc", "filter status codes"},
+      {"--mc", "match status codes"},
+      {"--fc", "filter status codes"},
     ]
     HYDE = [
       {"-d", "max recursion depth"},
@@ -40,8 +40,8 @@ module JekyllHyde::View
     JEKYLL = [
       {"FUZZ", "injection keyword, required in -u"},
       {"input", "clusterbomb · pitchfork (multi -w)"},
-      {"-ms -mw -ml", "match size · words · lines"},
-      {"-mr -mt", "match regex · time (-f… to filter)"},
+      {"--ms --mw --ml", "match size · words · lines"},
+      {"--mr --mt", "match regex · time (--f… to filter)"},
       {"and/or", "combine matchers and filters"},
     ]
 

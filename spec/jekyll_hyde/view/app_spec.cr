@@ -117,6 +117,33 @@ describe JekyllHyde::View::App do
     end
   end
 
+  it "launches straight onto the dashboard from a command-line scan, q drops to the cockpit" do
+    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
+    path = wordlist_file("admin", "missing")
+    begin
+      config = JekyllHyde::ScanConfig.new
+      config.mode = "HYDE"
+      config.url = server.base
+      config.wordlists = [path]
+      config.threads = 4
+      app = JekyllHyde::View::App.new(false, config)
+      command = app.init # the power-user override builds the session and opens on the scan
+      command.should_not be_nil
+      shows?(app, "SCANNING").should be_true   # no opener, no form
+      shows?(app, "jh --hyde").should be_false # the cockpit was skipped
+      pump(app, command)
+      shows?(app, "/admin").should be_true
+      shows?(app, "COMPLETE").should be_true
+      app.update(JekyllHyde::Tui::KeyMsg.new("q")) # q drops to the cockpit to compose another
+      shows?(app, "jh --hyde").should be_true
+      _, quit = app.update(JekyllHyde::Tui::KeyMsg.new("q")) # a second q quits
+      quit.try(&.call).should be_a(JekyllHyde::Tui::QuitMsg)
+    ensure
+      server.stop
+      File.delete(path)
+    end
+  end
+
   it "quits on q from the held frame" do
     app = held
     _, command = app.update(JekyllHyde::Tui::KeyMsg.new("q"))
