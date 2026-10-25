@@ -82,6 +82,18 @@ describe JekyllHyde::Http::Client do
     end
   end
 
+  it "sends an operator request body verbatim" do
+    server = FixtureServer.new({"/x" => FixtureServer::Route.new(200, "ok")})
+    begin
+      opts = JekyllHyde::Http::Options.new(method: "POST", body: "a=1&b=2")
+      JekyllHyde::Http::Client.new(server.base, opts).fetch("/x")
+      server.received_methods.should contain("POST")
+      server.received_bodies.first.should eq("a=1&b=2")
+    ensure
+      server.stop
+    end
+  end
+
   it "keeps the fixture on loopback only" do
     server = FixtureServer.new
     begin

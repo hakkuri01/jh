@@ -62,7 +62,16 @@ module JekyllHyde
         p.invalid_option { |flag| raise ArgumentError.new("unknown option #{flag}") }
       end
       parser.parse(argv)
+      imply_post(config)
       {parser, config, help}
+    end
+
+    # ffuf/feroxbuster "copy as curl" convenience: a request body with the method
+    # still at its GET default implies POST, so `--data` alone posts. An explicit
+    # `-X` wins, since it is no longer the default by the time this runs.
+    private def imply_post(c : ScanConfig) : Nil
+      body = c.body
+      c.method = "POST" if body && !body.empty? && c.method == "GET"
     end
 
     # Flags shared by both modes.
@@ -77,6 +86,7 @@ module JekyllHyde
       p.on("-X METHOD", "--method=METHOD", "HTTP request method (default GET)") { |v| c.method = v.strip.upcase }
       p.on("-H LINE", "--header=LINE", "request header 'Name: Value' (repeatable)") { |v| c.headers << v }
       p.on("-b COOKIE", "--cookie=COOKIE", "Cookie header value") { |v| c.cookie = v }
+      p.on("--data DATA", "request body, FUZZ-able in Jekyll (implies POST)") { |v| c.body = v }
       p.on("-o FILE", "--output=FILE", "write results to FILE on completion") { |v| c.output = v }
       p.on("--format FMT", "export format: json or csv (default json)") { |v| c.format = v }
     end
@@ -144,8 +154,12 @@ module JekyllHyde
       wrong_mode_flag(c) || bad_method(c) || bad_header(c) || missing_fuzz(c) || bad_format(c)
     end
 
-    # The request method must be one jh knows how to send.
+    # The request method must be one jh knows how to send, unless it is a Jekyll
+    # template carrying a bound keyword (ffuf fuzzes the method too): that only
+    # resolves to a real method per request, so the static allowlist cannot judge
+    # it here and the typo-guard applies to static methods alone.
     private def bad_method(c : ScanConfig) : String?
+      return nil if c.mode == "JEKYLL" && keywords(c).any? { |keyword| c.method.includes?(keyword) }
       "method must be one of #{METHODS.join(", ")}" unless METHODS.includes?(c.method)
     end
 
@@ -178,15 +192,16 @@ module JekyllHyde
     end
 
     # The first bound keyword absent from every request part, or nil when each
-    # appears somewhere (the URL, a header, the cookie, or the method). ffuf lets
-    # FUZZ live in any part, so a header-only keyword is valid.
+    # appears somewhere (the URL, a header, the cookie, the method, or the body).
+    # ffuf lets FUZZ live in any part, so a body-only keyword is valid.
     private def missing_keyword(c : ScanConfig) : String?
-      parts = [c.url, c.method, c.cookie || ""] + c.headers
-      c.wordlists.each do |spec|
-        keyword = Jekyll::Source.split(spec)[1]
-        return keyword unless parts.any?(&.includes?(keyword))
-      end
-      nil
+      parts = [c.url, c.method, c.cookie || "", c.body || ""] + c.headers
+      keywords(c).find { |keyword| parts.none?(&.includes?(keyword)) }
+    end
+
+    # The bound keyword of each -w spec (a bare path defaults to FUZZ).
+    private def keywords(c : ScanConfig) : Array(String)
+      c.wordlists.map { |spec| Jekyll::Source.split(spec)[1] }
     end
   end
 end

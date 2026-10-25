@@ -3,6 +3,7 @@ require "../core/sanitize"
 require "../core/response"
 require "./hud"
 require "./scene"
+require "./text"
 
 # The live results view a running scan draws into.
 module JekyllHyde::View
@@ -99,7 +100,7 @@ module JekyllHyde::View
     private def top_cluster(grid : Render::Grid, canvas : Scene::Canvas, state : State) : Nil
       accent = Render.accent(state.mode)
       branch(grid, TOP_TARGET, accent)
-      grid.text(TOP_TARGET, BRANCH_LABEL, clip(Core.sanitize(state.target), canvas.cols // 2), Render::TEXT)
+      grid.text(TOP_TARGET, BRANCH_LABEL, Text.clip(Core.sanitize(state.target), canvas.cols // 2), Render::TEXT)
       branch(grid, TOP_RESULTS, accent)
       grid.text(TOP_RESULTS, BRANCH_LABEL, "#{state.hits.size} results", accent)
       branch(grid, TOP_PULSE, accent)
@@ -148,7 +149,7 @@ module JekyllHyde::View
       top = PANEL_TOP
       accent = Render.accent(state.mode)
       if error = state.progress.error
-        grid.text(top, left, clip(Core.sanitize("error: #{error}"), right - left + 1), Render::HYDE)
+        grid.text(top, left, Text.clip(Core.sanitize("error: #{error}"), right - left + 1), Render::HYDE)
         return
       end
       cap = capacity(canvas.rows)
@@ -218,7 +219,7 @@ module JekyllHyde::View
       grid.rtext(at, cols.left + SIZE_END, hit.size.to_s, Render::TEXT)
       grid.rtext(at, cols.left + WORDS_END, hit.words.to_s, Render::MUTED)
       grid.rtext(at, cols.left + LINES_END, hit.lines.to_s, Render::MUTED)
-      path = clip(Core.sanitize(path_of(hit, cols.target)), cols.right - (cols.left + PATH) + 1)
+      path = Text.clip(Core.sanitize(path_of(hit, cols.target)), cols.right - (cols.left + PATH) + 1)
       grid.text(at, cols.left + PATH, path, directoryish?(hit) ? cols.accent : Render::TEXT)
     end
 
@@ -228,7 +229,7 @@ module JekyllHyde::View
       row, left, right = geom
       note = message(state.progress, state.hits.size)
       return unless note
-      grid.text(row, left, clip(note[0], right - left + 1), note[1])
+      grid.text(row, left, Text.clip(note[0], right - left + 1), note[1])
     end
 
     # The contextual warning line: a non-fatal notice (crawl cap hit, export
@@ -271,14 +272,6 @@ module JekyllHyde::View
       when 500..599 then Render::HYDE
       else               Render::MUTED
       end
-    end
-
-    # *text* cut to *width* cells, a trailing ellipsis marking a cut.
-    private def clip(text : String, width : Int32) : String
-      return "" if width <= 0
-      return text if text.size <= width
-      return text[0, width] if width < 2
-      "#{text[0, width - 1]}…"
     end
   end
 end

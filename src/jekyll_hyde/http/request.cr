@@ -2,12 +2,13 @@ require "http/headers"
 
 module JekyllHyde::Http
   # One outbound request a pool worker sends: the method, the origin-relative
-  # path, and the headers (operator `-H` values plus any `-b` cookie). All of it
-  # is operator bytes, sent verbatim; the client adds a default User-Agent only
-  # when the operator did not supply one. In Jekyll each field may carry a FUZZ
-  # keyword that the template substitutes per combination; in Hyde the method and
-  # headers are static across the walk.
-  record Request, method : String, path : String, headers : HTTP::Headers do
+  # path, the headers (operator `-H` values plus any `-b` cookie), and an
+  # optional request body (`--data`). All of it is operator bytes, sent verbatim;
+  # the client adds a default User-Agent only when the operator did not supply
+  # one. In Jekyll each field may carry a FUZZ keyword that the template
+  # substitutes per combination; in Hyde the method, headers, and body are static
+  # across the walk.
+  record Request, method : String, path : String, headers : HTTP::Headers, body : String? = nil do
     # Parse raw "Name: Value" lines (as supplied by `-H`, and the folded `-b`
     # cookie) into HTTP::Headers, splitting on the first colon so a value may
     # itself contain one. A line without a colon or with an empty name is

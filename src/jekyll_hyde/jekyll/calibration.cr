@@ -47,7 +47,8 @@ module JekyllHyde::Jekyll
       requests = strings.map do |string|
         values = fill(string)
         headers = Http::Request.headers_from(@options.headers.map { |line| @template.fill(line, values) })
-        Http::Request.new(@template.fill(@options.method, values), @template.path(values), headers)
+        body = @options.body.try { |raw| @template.fill(raw, values) }
+        Http::Request.new(@template.fill(@options.method, values), @template.path(values), headers, body)
       end
       out = [] of Candidate
       Http::Pool.new(@template.origin, @options, requests.size).run(requests) do |job|

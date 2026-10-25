@@ -293,6 +293,72 @@ describe JekyllHyde::View::App do
     static.should be > 20
   end
 
+  it "opens the wordlist finder on / over a filled -w field and filters live" do
+    path = wordlist_file("admin", "login", "administrator", "api")
+    begin
+      app = held
+      app.update(JekyllHyde::Tui::KeyMsg.new("enter")) # open the cockpit
+      type_field(app, 1, path)                         # fill the wordlist field
+      focus(app, 1)                                    # focus -w
+      app.update(JekyllHyde::Tui::KeyMsg.new("/"))     # open the finder
+      shows?(app, "FINDER").should be_true
+      shows?(app, "MATCHES").should be_true
+      shows?(app, "admin").should be_true
+      shows?(app, "login").should be_true
+      "admin".each_char { |char| app.update(JekyllHyde::Tui::KeyMsg.new(char.to_s)) }
+      shows?(app, "administrator").should be_true # substring match survives
+      shows?(app, "login").should be_false        # filtered out
+      shows?(app, "api").should be_false
+    ensure
+      File.delete(path)
+    end
+  end
+
+  it "steps back from the finder to the cockpit on esc, q types into the filter" do
+    path = wordlist_file("alpha", "quebec")
+    begin
+      app = held
+      app.update(JekyllHyde::Tui::KeyMsg.new("enter"))
+      type_field(app, 1, path)
+      focus(app, 1)
+      app.update(JekyllHyde::Tui::KeyMsg.new("/"))
+      app.update(JekyllHyde::Tui::KeyMsg.new("q")) # q is a filter character, not an exit
+      shows?(app, "FINDER").should be_true
+      shows?(app, "quebec").should be_true # matched the q
+      shows?(app, "alpha").should be_false
+      app.update(JekyllHyde::Tui::KeyMsg.new("esc")) # esc returns to the form
+      shows?(app, "FINDER").should be_false
+      shows?(app, "jh --hyde").should be_true
+    ensure
+      File.delete(path)
+    end
+  end
+
+  it "does not open the finder on an empty wordlist field" do
+    app = held
+    app.update(JekyllHyde::Tui::KeyMsg.new("enter"))
+    focus(app, 1)                                # -w, left empty
+    app.update(JekyllHyde::Tui::KeyMsg.new("/")) # no-op
+    shows?(app, "FINDER").should be_false
+    shows?(app, "jh --hyde").should be_true
+  end
+
+  it "previews the wordlist with the active mode's loading discipline (Hyde dedups)" do
+    path = wordlist_file("# comment", "admin", "admin", "login")
+    begin
+      app = held # Hyde
+      app.update(JekyllHyde::Tui::KeyMsg.new("enter"))
+      type_field(app, 1, path)
+      focus(app, 1)
+      app.update(JekyllHyde::Tui::KeyMsg.new("/"))
+      shows?(app, "FINDER").should be_true
+      shows?(app, "# comment").should be_false # Hyde discipline drops comments
+      shows?(app, "2 entries").should be_true  # admin (deduped once) + login
+    ensure
+      File.delete(path)
+    end
+  end
+
   it "does not launch a scan until the mandatory fields are set" do
     app = held
     app.update(JekyllHyde::Tui::KeyMsg.new("enter")) # open the cockpit

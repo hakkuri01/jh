@@ -23,22 +23,22 @@ module JekyllHyde::Http
       @base_headers = Request.headers_from(@options.headers)
     end
 
-    # Lazily wraps bare paths as Requests with one static method and header set,
-    # so the String overload stays O(1) in space over a huge path stream.
+    # Lazily wraps bare paths as Requests with one static method, header set, and
+    # body, so the String overload stays O(1) in space over a huge path stream.
     private struct PathRequests
       include Enumerable(Request)
 
-      def initialize(@paths : Enumerable(String), @method : String, @headers : HTTP::Headers)
+      def initialize(@paths : Enumerable(String), @method : String, @headers : HTTP::Headers, @body : String? = nil)
       end
 
       def each(& : Request ->) : Nil
-        @paths.each { |path| yield Request.new(@method, path, @headers) }
+        @paths.each { |path| yield Request.new(@method, path, @headers, @body) }
       end
     end
 
-    # Run every path in *paths* with the options' static method and headers.
+    # Run every path in *paths* with the options' static method, headers, and body.
     def run(paths : Enumerable(String), cancel : Proc(Bool)? = nil, pause : Proc(Bool)? = nil, &) : Nil
-      run(PathRequests.new(paths, @options.method, @base_headers), cancel, pause) { |job| yield job }
+      run(PathRequests.new(paths, @options.method, @base_headers, @options.body), cancel, pause) { |job| yield job }
     end
 
     # Run every request in *requests*, yielding each Job as it completes
@@ -52,6 +52,11 @@ module JekyllHyde::Http
       jobs = Channel(Request).new(@concurrency)
       results = Channel(Job).new(@concurrency)
       done = Channel(Nil).new
+      # A request the producer fails to build (e.g. a FUZZ value that makes an
+      # invalid header) is captured and re-raised after the pool drains, so the
+      # scan ends with one actionable error instead of hanging on a feed fiber
+      # that died before it could close the jobs channel.
+      producer_error = nil
 
       @concurrency.times do
         spawn do
@@ -59,11 +64,20 @@ module JekyllHyde::Http
           done.send(nil)
         end
       end
-      spawn feed(requests, jobs, cancel, pause)
+      spawn do
+        feed(requests, jobs, cancel, pause)
+      rescue ex
+        producer_error = ex
+      ensure
+        jobs.close
+      end
       spawn close_when_drained(done, results)
 
       while job = results.receive?
         yield job
+      end
+      if error = producer_error
+        raise error
       end
     end
 
@@ -75,7 +89,6 @@ module JekyllHyde::Http
         break if cancel.try(&.call)
         jobs.send(request)
       end
-      jobs.close
     end
 
     private def close_when_drained(done : Channel(Nil), results : Channel(Job)) : Nil

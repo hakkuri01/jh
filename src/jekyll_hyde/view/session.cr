@@ -187,7 +187,7 @@ module JekyllHyde::View
       end
       template = Jekyll::Template.new(@config.url, sources.map(&.keyword))
       input = Jekyll::Input.new(sources, @config.input_mode)
-      options = Http::Options.jekyll(verify_tls: !@config.insecure?, method: @config.method, headers: @config.request_headers)
+      options = Http::Options.jekyll(verify_tls: !@config.insecure?, method: @config.method, headers: @config.request_headers, body: @config.body)
       Jekyll::Scan.new(template, input, options, concurrency: @config.threads, rules: jekyll_rules, auto_calibrate: @config.calibrate?)
     end
 
@@ -197,7 +197,7 @@ module JekyllHyde::View
       paths = @config.wordlists.map { |spec| Jekyll::Source.split(spec)[0] }
       list = Wordlist::List.deduplicated(paths).with_extensions(@config.extensions)
       depth = @config.no_recursion? ? 1 : @config.depth
-      options = Http::Options.hyde(verify_tls: !@config.insecure?, method: @config.method, headers: @config.request_headers)
+      options = Http::Options.hyde(verify_tls: !@config.insecure?, method: @config.method, headers: @config.request_headers, body: @config.body)
       Hyde::Scan.new(@config.url, list, options, concurrency: @config.threads, max_depth: depth, auto_tune: @config.auto_tune?)
     end
 

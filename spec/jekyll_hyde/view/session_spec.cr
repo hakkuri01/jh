@@ -190,6 +190,46 @@ describe JekyllHyde::View::ScanSession do
     end
   end
 
+  it "sends a request body but never writes it into an export" do
+    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret body")})
+    path = wordlist_file("admin")
+    outfile = File.tempfile("jh_out")
+    outfile.close
+    begin
+      config = jekyll_config("#{server.base}/FUZZ", path)
+      config.method = "POST"
+      config.body = "payload=LEAKBODY"
+      config.output = outfile.path
+      config.format = "json"
+      session = JekyllHyde::View::ScanSession.new(config)
+      drain(session).should be_a(JekyllHyde::View::ScanDoneMsg)
+      server.received_bodies.any?(&.includes?("LEAKBODY")).should be_true # went out on the wire
+      dump = File.read(outfile.path)
+      dump.should contain("/admin")
+      dump.should_not contain("LEAKBODY") # ... but never into the results file
+    ensure
+      server.stop
+      File.delete(path)
+      File.delete(outfile.path)
+    end
+  end
+
+  it "sends the request body on Hyde requests too" do
+    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "x")})
+    path = wordlist_file("admin")
+    begin
+      config = hyde_config(server.base, path, concurrency: 2, depth: 1)
+      config.method = "POST"
+      config.body = "probe=1"
+      session = JekyllHyde::View::ScanSession.new(config)
+      drain(session).should be_a(JekyllHyde::View::ScanDoneMsg)
+      server.received_bodies.any?(&.==("probe=1")).should be_true
+    ensure
+      server.stop
+      File.delete(path)
+    end
+  end
+
   it "surfaces a failed export as a warning and leaves no partial file (not silent success)" do
     server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
     path = wordlist_file("admin")

@@ -6,8 +6,10 @@ require "../scan_config"
 require "./scene"
 require "./shell"
 require "./help"
+require "./finder"
 require "./results"
 require "./session"
+require "./app_editing"
 
 # The interactive program.
 module JekyllHyde::View
@@ -38,6 +40,7 @@ module JekyllHyde::View
       Switching
       Shell
       Help
+      Finder
       Scanning
     end
 
@@ -54,6 +57,7 @@ module JekyllHyde::View
     @switch_to : String
     @switch_origin : Phase
     @session : ScanSession?
+    @finder : Finder::Session?
     @cursor : Int32
     @scroll : Int32
     @rows : Int32
@@ -72,6 +76,7 @@ module JekyllHyde::View
       @switch_to = @mode
       @switch_origin = Phase::Steady
       @session = nil
+      @finder = nil
       @cursor = 0
       @scroll = 0
       @rows = 24
@@ -135,6 +140,7 @@ module JekyllHyde::View
       when .switching? then switching_frame(canvas)
       when .shell?     then Shell.frame(canvas, Shell::State.new(@mode, @field, @editing, @values, @cursor))
       when .help?      then Help.frame(canvas, @mode)
+      when .finder?    then Finder.frame(canvas, finder_state)
       when .scanning?  then Results.frame(canvas, results_state)
       else                  Scene.steady(canvas, @mode)
       end
@@ -194,6 +200,7 @@ module JekyllHyde::View
       when .steady?   then steady_key(name)
       when .shell?    then shell_key(name)
       when .help?     then help_key(name)
+      when .finder?   then finder_key(name)
       when .scanning? then scanning_key(name)
       else                 {self, nil}
       end
@@ -239,6 +246,7 @@ module JekyllHyde::View
       when "j", "down" then move(1)
       when "k", "up"   then move(-1)
       when "i"         then begin_insert
+      when "/"         then open_finder
       when "enter"     then execute
       when "tab"       then begin_switch
       when "h"         then open_help
@@ -268,71 +276,44 @@ module JekyllHyde::View
       {self, nil}
     end
 
+    # The wordlist finder opens from NORMAL on `/`, but only when the focused
+    # field is the wordlist and it holds a path: there is nothing to preview
+    # otherwise. The list loads once here with the mode's discipline; a bad path
+    # is held as an error the overlay shows, not raised.
+    private def open_finder : {Tui::Model, Tui::Cmd?}
+      field = Shell.fields(@mode)[@field]
+      value = @values[@field]
+      return {self, nil} if field.flag != "-w" || value.empty?
+      @finder = Finder::Session.new(value, @mode)
+      @phase = Phase::Finder
+      {self, nil}
+    end
+
+    # In the finder, the session owns the filter and scroll; it says when a key
+    # means "leave". Esc/Enter close back to the form.
+    private def finder_key(name : String) : {Tui::Model, Tui::Cmd?}
+      finder = @finder
+      return {self, nil} unless finder
+      finder.handle(name, Finder.capacity(@rows)).close? ? close_finder : {self, nil}
+    end
+
+    private def close_finder : {Tui::Model, Tui::Cmd?}
+      @finder = nil
+      @phase = Phase::Shell
+      {self, nil}
+    end
+
+    # The finder snapshot for the current frame; an empty stand-in when there is
+    # no session, though the Finder phase is only entered with one.
+    private def finder_state : Finder::State
+      @finder.try(&.state) || Finder::State.new(@mode, "", 0, "", [] of String, 0, nil)
+    end
+
     # INSERT: printable keys and Backspace/Delete edit at the caret, the arrows
     # and Home/End move the caret within the field, Enter runs the scan, and Esc
-    # leaves INSERT for NORMAL.
-    private def insert_key(name : String) : {Tui::Model, Tui::Cmd?}
-      case name
-      when "enter"     then execute
-      when "esc"       then stop_editing
-      when "left"      then move_cursor(-1)
-      when "right"     then move_cursor(1)
-      when "home"      then place_cursor(0)
-      when "end"       then place_cursor(@values[@field].size)
-      when "backspace" then delete_before_cursor
-      when "delete"    then delete_at_cursor
-      else                  insert_char(name)
-      end
-    end
-
-    private def stop_editing : {Tui::Model, Tui::Cmd?}
-      @editing = false
-      {self, nil}
-    end
-
-    private def move_cursor(delta : Int32) : {Tui::Model, Tui::Cmd?}
-      place_cursor(@cursor + delta)
-    end
-
-    # Clamp the caret into the focused field; insertions and deletes act at it.
-    private def place_cursor(position : Int32) : {Tui::Model, Tui::Cmd?}
-      @cursor = position.clamp(0, @values[@field].size)
-      {self, nil}
-    end
-
-    private def insert_char(name : String) : {Tui::Model, Tui::Cmd?}
-      return {self, nil} unless name.size == 1
-      value = @values[@field]
-      @values[@field] = value[0, @cursor] + name + value[@cursor..]
-      @cursor += 1
-      {self, nil}
-    end
-
-    private def delete_before_cursor : {Tui::Model, Tui::Cmd?}
-      return {self, nil} if @cursor == 0
-      value = @values[@field]
-      @values[@field] = value[0, @cursor - 1] + value[@cursor..]
-      @cursor -= 1
-      {self, nil}
-    end
-
-    private def delete_at_cursor : {Tui::Model, Tui::Cmd?}
-      value = @values[@field]
-      return {self, nil} if @cursor >= value.size
-      @values[@field] = value[0, @cursor] + value[(@cursor + 1)..]
-      {self, nil}
-    end
-
-    private def move(delta : Int32) : {Tui::Model, Tui::Cmd?}
-      @field = (@field + delta).clamp(0, Shell.fields(@mode).size - 1)
-      {self, nil}
-    end
-
-    private def begin_insert : {Tui::Model, Tui::Cmd?}
-      @editing = true
-      @cursor = @values[@field].size
-      {self, nil}
-    end
+    # leaves INSERT for NORMAL. The INSERT caret editing and NORMAL field
+    # navigation live in app_editing.cr (a reopened App), to keep this file under
+    # the size limit.
 
     # Run the composed scan in either mode, but only once the mandatory fields
     # are set (target and wordlist, plus a FUZZ keyword in Jekyll); otherwise
@@ -479,6 +460,7 @@ module JekyllHyde::View
     private def resize(msg : Tui::ResizeMsg) : {Tui::Model, Tui::Cmd?}
       @rows = msg.height
       @scroll = @scroll.clamp(0, max_scroll)
+      @finder.try(&.clamp(Finder.capacity(@rows)))
       {self, nil}
     end
 

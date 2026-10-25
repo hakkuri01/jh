@@ -1,6 +1,7 @@
 require "../render/grid"
 require "./hud"
 require "./scene"
+require "./text"
 
 # The in-TUI command reference.
 module JekyllHyde::View
@@ -17,6 +18,7 @@ module JekyllHyde::View
     KEYS = [
       {"j/k ↑/↓", "move between fields"},
       {"i", "edit the field"},
+      {"/", "preview the wordlist (on -w)"},
       {"enter", "run the scan"},
       {"tab", "switch the mode"},
       {"h", "toggle this help"},
@@ -77,17 +79,9 @@ module JekyllHyde::View
         grid.put(row, left + 3, '◈', section.accent)
         grid.text(row, left + 5, key, Render::TEXT)
         desc_col = left + 6 + keyw
-        grid.text(row, desc_col, clip(desc, right - desc_col + 1), Render::MUTED)
+        grid.text(row, desc_col, Text.clip(desc, right - desc_col + 1), Render::MUTED)
       end
       top + section.rows.size
-    end
-
-    # *text* cut to *width* cells so a narrow column never bleeds into its
-    # neighbor, a trailing ellipsis marking the cut.
-    private def clip(text : String, width : Int32) : String
-      return "" if width <= 0
-      return text if text.size <= width
-      width < 2 ? text[0, width] : "#{text[0, width - 1]}…"
     end
 
     # The heavy section header: ┏━┫ LABEL ┣━━…, matching the cockpit's dividers.

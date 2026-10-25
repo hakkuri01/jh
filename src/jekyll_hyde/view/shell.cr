@@ -20,7 +20,7 @@ module JekyllHyde::View
     # The Jekyll injection keyword.
     KEYWORD = "FUZZ"
     # The key cheatsheets docked into the HUD, by mode.
-    NORMAL_KEYS = "j/k move · i edit · tab mode · enter run · h help · q quit"
+    NORMAL_KEYS = "j/k move · i edit · / find · tab mode · enter run · h help · q quit"
     INSERT_KEYS = "type · enter run · esc normal"
     # The panel's widest width in cells, and the numeric meter's notch count.
     CARD_MAX = 74

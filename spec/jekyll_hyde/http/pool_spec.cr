@@ -2,6 +2,17 @@ require "../../spec_helper"
 require "../../support/fixture_server"
 require "../../../src/jekyll_hyde/http/pool"
 
+# An input stream that yields one request and then fails, standing in for a
+# producer that raises partway (e.g. a FUZZ value that makes an invalid header).
+private struct RaisingRequests
+  include Enumerable(JekyllHyde::Http::Request)
+
+  def each(& : JekyllHyde::Http::Request ->) : Nil
+    yield JekyllHyde::Http::Request.new("GET", "/a", HTTP::Headers.new)
+    raise "request generation failed"
+  end
+end
+
 describe JekyllHyde::Http::Pool do
   it "runs every path and returns one result each, carrying its path" do
     server = FixtureServer.new({
@@ -76,5 +87,19 @@ describe JekyllHyde::Http::Pool do
     pool.run(["/a", "/b"]) { |job| jobs << job }
     jobs.size.should eq(2)
     jobs.all?(&.outcome.nil?).should be_true
+  end
+
+  it "does not hang when request generation raises partway, and re-raises it" do
+    server = FixtureServer.new({"/a" => FixtureServer::Route.new(200, "ok")})
+    begin
+      pool = JekyllHyde::Http::Pool.new(server.base, concurrency: 2)
+      # If the producer's exception left the jobs channel open, the workers would
+      # block forever and this example would time out rather than raise.
+      expect_raises(Exception, "request generation failed") do
+        pool.run(RaisingRequests.new) { }
+      end
+    ensure
+      server.stop
+    end
   end
 end

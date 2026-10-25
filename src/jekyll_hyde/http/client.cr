@@ -12,9 +12,11 @@ module JekyllHyde::Http
 
   # Per-request knobs. `Options.new` is the neutral default (10s, 5 MB); each mode
   # builds its own values through `.jekyll` / `.hyde`. Timeouts are in seconds.
-  # *method* and *headers* carry the operator's `-X`/`-H`/`-b` (headers as raw
-  # "Name: Value" lines, the cookie folded in); both default to a plain GET with
-  # no extra headers, so a scan that sets neither is byte-identical to before.
+  # *method*, *headers*, and *body* carry the operator's `-X`/`-H`/`-b`/`--data`
+  # (headers as raw "Name: Value" lines, the cookie folded in); all default to a
+  # plain GET with no extra headers and no body, so a scan that sets none is
+  # byte-identical to before. *body*, like the headers, is operator bytes the
+  # request layer sends verbatim and never records into a result.
   record Options,
     connect_timeout : Float64 = 10.0,
     read_timeout : Float64 = 10.0,
@@ -22,18 +24,19 @@ module JekyllHyde::Http
     verify_tls : Bool = true,
     user_agent : String = "jh/#{JekyllHyde::VERSION}",
     method : String = "GET",
-    headers : Array(String) = [] of String do
+    headers : Array(String) = [] of String,
+    body : String? = nil do
     # Jekyll defaults: a 10s request timeout and a 5 MB body cap. jh caps the body
     # because an unbounded untrusted body is a DoS (AGENTS security), so a body
-    # past 5 MB is truncated. *verify_tls* is the operator's `-k` choice; *method*
-    # and *headers* carry `-X`/`-H`/`-b`.
-    def self.jekyll(verify_tls : Bool = true, method : String = "GET", headers : Array(String) = [] of String) : Options
-      new(connect_timeout: 10.0, read_timeout: 10.0, max_body_size: 5_242_880, verify_tls: verify_tls, method: method, headers: headers)
+    # past 5 MB is truncated. *verify_tls* is the operator's `-k` choice; *method*,
+    # *headers*, and *body* carry `-X`/`-H`/`-b`/`--data`.
+    def self.jekyll(verify_tls : Bool = true, method : String = "GET", headers : Array(String) = [] of String, body : String? = nil) : Options
+      new(connect_timeout: 10.0, read_timeout: 10.0, max_body_size: 5_242_880, verify_tls: verify_tls, method: method, headers: headers, body: body)
     end
 
     # Hyde defaults: a 7s request timeout and a 4 MB body read cap.
-    def self.hyde(verify_tls : Bool = true, method : String = "GET", headers : Array(String) = [] of String) : Options
-      new(connect_timeout: 7.0, read_timeout: 7.0, max_body_size: 4_194_304, verify_tls: verify_tls, method: method, headers: headers)
+    def self.hyde(verify_tls : Bool = true, method : String = "GET", headers : Array(String) = [] of String, body : String? = nil) : Options
+      new(connect_timeout: 7.0, read_timeout: 7.0, max_body_size: 4_194_304, verify_tls: verify_tls, method: method, headers: headers, body: body)
     end
   end
 
@@ -49,18 +52,18 @@ module JekyllHyde::Http
       @base_headers = Request.headers_from(@options.headers)
     end
 
-    # Fetch *path* with the options' static method and headers (the Hyde and
-    # calibration path). Raises Error on a connect, TLS, or timeout failure.
+    # Fetch *path* with the options' static method, headers, and body (the Hyde
+    # and calibration path). Raises Error on a connect, TLS, or timeout failure.
     def fetch(path : String) : Outcome
-      fetch(Request.new(@options.method, path, @base_headers))
+      fetch(Request.new(@options.method, path, @base_headers, @options.body))
     end
 
-    # Fetch a fully built *request* (the Jekyll path, where method and headers may
-    # have had FUZZ substituted per combination). Raises Error on failure.
+    # Fetch a fully built *request* (the Jekyll path, where method, headers, and
+    # body may have had FUZZ substituted per combination). Raises Error on failure.
     def fetch(request : Request) : Outcome
       headers = merged_headers(request.headers)
       started = Time.instant
-      outcome = @http.exec(request.method, request.path, headers) { |response| read_outcome(response) }
+      outcome = @http.exec(request.method, request.path, headers, request.body) { |response| read_outcome(response) }
       elapsed = Time.instant - started
       # A truncated read left bytes unread on the socket; Crystal reuses a
       # keep-alive connection, and leftover body corrupts the next request on it
@@ -85,6 +88,10 @@ module JekyllHyde::Http
       http = uri.scheme == "https" ? HTTP::Client.new(uri, tls: tls_context) : HTTP::Client.new(uri)
       http.connect_timeout = @options.connect_timeout.seconds
       http.read_timeout = @options.read_timeout.seconds
+      # Bound the write too: a `--data` body can be large, and a target that
+      # accepts the connection then stops reading would otherwise block a worker
+      # mid-write with no timeout (AGENTS security, network limits).
+      http.write_timeout = @options.read_timeout.seconds
       http
     end
 

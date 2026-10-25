@@ -22,6 +22,7 @@ class FixtureServer
   getter received = [] of String
   getter received_methods = [] of String
   getter received_headers = [] of HTTP::Headers
+  getter received_bodies = [] of String
 
   def initialize(@routes : Hash(String, Route) = {} of String => Route, *, @wildcard : Bool = false, @delay : Time::Span = Time::Span.zero, @responder : Proc(String, Route?)? = nil)
     @in_flight = 0
@@ -56,6 +57,7 @@ class FixtureServer
     @received << path
     @received_methods << context.request.method
     @received_headers << context.request.headers
+    @received_bodies << (context.request.body.try(&.gets_to_end) || "")
     sleep(@delay) unless @delay.zero?
     route = @routes[path]?
     route ||= @responder.try(&.call(path))

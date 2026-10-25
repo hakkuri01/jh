@@ -34,6 +34,10 @@ module JekyllHyde
     property method = "GET"
     property headers = [] of String
     property cookie : String? = nil
+    # Request body (--data): sent verbatim on every request, FUZZ-substituted per
+    # combination in Jekyll. Like -H/-b, it is kept out of Core::Response and
+    # every export, so a supplied payload never lands in a results file.
+    property body : String? = nil
     property matchers = [] of Jekyll::Rule
     property filters = [] of Jekyll::Rule
     property matcher_mode = Jekyll::Rules::Mode::Or

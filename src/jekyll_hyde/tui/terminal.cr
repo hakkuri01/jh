@@ -1,5 +1,5 @@
 require "io/console"
-require "../platform/darwin"
+require "../platform/winsize"
 
 # The terminal device.
 module JekyllHyde::Tui

@@ -112,6 +112,46 @@ describe JekyllHyde::Jekyll::Scan do
     end
   end
 
+  it "substitutes FUZZ into the request body on every fuzzed request" do
+    server = FixtureServer.new({} of String => FixtureServer::Route, wildcard: true)
+    begin
+      template = JekyllHyde::Jekyll::Template.new("#{server.base}/post", ["FUZZ"])
+      options = JekyllHyde::Http::Options.jekyll(method: "POST", body: "token=FUZZ")
+      rules = JekyllHyde::Jekyll::Rules.new([JekyllHyde::Jekyll::Rule.build("status", "all")])
+      JekyllHyde::Jekyll::Scan.new(template, wordlist("alpha", "beta"), options, concurrency: 2, rules: rules).run
+      server.received_bodies.to_set.should eq(Set{"token=alpha", "token=beta"})
+    ensure
+      server.stop
+    end
+  end
+
+  it "sends each fuzzed body in order on a single reused connection (concurrency 1)" do
+    server = FixtureServer.new({} of String => FixtureServer::Route, wildcard: true)
+    begin
+      template = JekyllHyde::Jekyll::Template.new("#{server.base}/post", ["FUZZ"])
+      options = JekyllHyde::Http::Options.jekyll(method: "POST", body: "token=FUZZ")
+      rules = JekyllHyde::Jekyll::Rules.new([JekyllHyde::Jekyll::Rule.build("status", "all")])
+      JekyllHyde::Jekyll::Scan.new(template, wordlist("a", "b", "c"), options, concurrency: 1, rules: rules).run
+      # One worker, one keep-alive client: the bodies arrive in input order.
+      server.received_bodies.should eq(["token=a", "token=b", "token=c"])
+    ensure
+      server.stop
+    end
+  end
+
+  it "fuzzes the request method itself when FUZZ is the method" do
+    server = FixtureServer.new({} of String => FixtureServer::Route, wildcard: true)
+    begin
+      template = JekyllHyde::Jekyll::Template.new("#{server.base}/ping", ["FUZZ"])
+      options = JekyllHyde::Http::Options.jekyll(method: "FUZZ")
+      rules = JekyllHyde::Jekyll::Rules.new([JekyllHyde::Jekyll::Rule.build("status", "all")])
+      JekyllHyde::Jekyll::Scan.new(template, wordlist("GET", "HEAD"), options, concurrency: 2, rules: rules).run
+      server.received_methods.to_set.should eq(Set{"GET", "HEAD"})
+    ensure
+      server.stop
+    end
+  end
+
   it "sends the operator method on every fuzzed request" do
     server = FixtureServer.new({} of String => FixtureServer::Route, wildcard: true)
     begin

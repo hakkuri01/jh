@@ -15,6 +15,22 @@ module JekyllHyde::Core
     end
   end
 
+  # Sanitize at most *limit* characters, stopping early. A caller that will only
+  # show *limit* cells never pays for a pathologically long line, so a per-frame
+  # render stays O(cells drawn), not O(line) (AGENTS Big O). One forward pass,
+  # bounded by *limit*; sanitizing is 1:1 on characters, so the cap is exact.
+  def self.sanitize(text : String, limit : Int32) : String
+    return "" if limit <= 0
+    String.build do |io|
+      count = 0
+      text.each_char do |char|
+        break if count >= limit
+        io << (printable?(char) ? char : '·')
+        count += 1
+      end
+    end
+  end
+
   # A character safe to place in a cell: not a C0 control (ESC, newline, tab
   # among them), not DEL, not a C1 control, not a bidi embedding, override, or
   # isolate that could reorder a line.

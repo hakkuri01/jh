@@ -111,6 +111,32 @@ describe JekyllHyde::Entry do
     config.request_headers.should eq(["A: 1", "B: 2", "Cookie: s=1"])
   end
 
+  it "parses --data and implies POST when the method is still the GET default" do
+    config = config_for(["--jekyll", "-u", "http://host/FUZZ", "-w", "x", "--data", "a=1"])
+    config.body.should eq("a=1")
+    config.method.should eq("POST")
+  end
+
+  it "keeps an explicit method when --data is given" do
+    config = config_for(["--jekyll", "-u", "http://host/FUZZ", "-w", "x", "--data", "a=1", "-X", "PUT"])
+    config.method.should eq("PUT")
+  end
+
+  it "accepts a Jekyll keyword that appears only in the request body" do
+    io = IO::Memory.new # not a tty, so a valid command stops at the terminal gate
+    JekyllHyde::Entry.run(["--jekyll", "-u", "http://host/static", "-w", "x", "--data", "token=FUZZ"], io).should eq(2)
+    io.to_s.should_not contain("FUZZ keyword")
+    io.to_s.should contain("interactive terminal")
+  end
+
+  it "accepts a keyworded request method in Jekyll (method fuzzing), not rejecting it as unknown" do
+    io = IO::Memory.new
+    JekyllHyde::Entry.run(["--jekyll", "-u", "http://host/static", "-w", "verbs.txt:FUZZ", "-X", "FUZZ"], io).should eq(2)
+    io.to_s.should_not contain("method must be one of")
+    io.to_s.should_not contain("FUZZ keyword")
+    io.to_s.should contain("interactive terminal")
+  end
+
   it "rejects an unknown request method" do
     io = IO::Memory.new
     JekyllHyde::Entry.run(["--hyde", "-u", "http://host/", "-w", "x", "-X", "frob"], io).should eq(2)
