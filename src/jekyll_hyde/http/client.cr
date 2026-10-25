@@ -10,6 +10,17 @@ module JekyllHyde::Http
   class Error < Exception
   end
 
+  # Whether *url* is an http(s) URL with a host: the one gate a scan target and a
+  # `--filter-similar-to` reference must pass before any request fiber starts, so
+  # the predicate has a single home (AGENTS Security 9).
+  def self.valid_url?(url : String) : Bool
+    uri = URI.parse(url)
+    host = uri.host
+    (uri.scheme == "http" || uri.scheme == "https") && !host.nil? && !host.empty?
+  rescue
+    false
+  end
+
   # Per-request knobs. `Options.new` is the neutral default (10s, 5 MB); each mode
   # builds its own values through `.jekyll` / `.hyde`. Timeouts are in seconds.
   # *method*, *headers*, and *body* carry the operator's `-X`/`-H`/`-b`/`--data`

@@ -56,7 +56,7 @@ module JekyllHyde::Hyde
     # Set once if the frontier cap is hit, surfaced in the dashboard footer.
     getter warning : String? = nil
 
-    def initialize(target : String, @wordlist : Wordlist::List, @options : Http::Options = Http::Options.hyde, *, concurrency : Int32 = 40, @max_depth : Int32 = 4, auto_tune : Bool = false, @max_frontier : Int32 = MAX_FRONTIER)
+    def initialize(target : String, @wordlist : Wordlist::List, @options : Http::Options = Http::Options.hyde, *, concurrency : Int32 = 40, @max_depth : Int32 = 4, auto_tune : Bool = false, @similar_to : Array(String) = [] of String, @max_frontier : Int32 = MAX_FRONTIER)
       uri = URI.parse(target)
       # Origin is scheme://host[:port] only; the path becomes the scan's base
       # directory. The stdlib HTTP::Client keeps only host+port anyway, so paths
@@ -101,6 +101,7 @@ module JekyllHyde::Hyde
     end
 
     private def perform : Core::Results
+      seed_similarity_filters
       enqueue_dir(@base)
       until @queue.empty? || cancelled?
         scan_directory(@queue.shift)
@@ -140,6 +141,43 @@ module JekyllHyde::Hyde
       @extractor.extract_robots(decode(outcome.body)).each { |link| offer(link, worklist) }
     rescue Http::Error
       # no reachable robots.txt, nothing to seed
+    end
+
+    # Seed the near-duplicate filters from operator reference pages
+    # (--filter-similar-to): fetch each, hash its body, and seed the same
+    # `@sim_filters` the soft-404 fallback uses. Best effort: a reference that is
+    # not a valid URL, cannot be fetched, or is empty is skipped with a warning,
+    # never fatal.
+    private def seed_similarity_filters : Nil
+      @similar_to.each do |url|
+        unless Http.valid_url?(url)
+          skip_reference
+          next
+        end
+        body = decode(fetch_reference(URI.parse(url)).body)
+        if body.empty?
+          skip_reference
+          next
+        end
+        filter = SimilarityFilter.from(body)
+        @sim_filters << filter unless @sim_filters.includes?(filter)
+      rescue Http::Error
+        skip_reference
+      end
+    end
+
+    # Fetch a reference page. Its origin usually matches the scan target, so the
+    # operator's auth headers and cookie are sent; a cross-origin reference is
+    # fetched WITHOUT them, so a target credential never leaks to another host
+    # (a deliberate step beyond feroxbuster, whose headers are global).
+    private def fetch_reference(uri : URI) : Http::Outcome
+      headers = origin_of(uri) == @origin ? Http::Request.headers_from(@options.headers) : HTTP::Headers.new
+      request = Http::Request.new("GET", uri.request_target, headers)
+      Http::Client.new(origin_of(uri), @options).fetch(request)
+    end
+
+    private def skip_reference : Nil
+      @warning ||= "a --filter-similar-to reference could not be used; its filter was skipped"
     end
 
     private def drain(worklist : Deque(String)) : Nil

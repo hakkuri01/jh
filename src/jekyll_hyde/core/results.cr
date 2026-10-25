@@ -59,6 +59,25 @@ module JekyllHyde::Core
       end
     end
 
+    # The results serialized in *format* ("csv" or anything else = JSON).
+    def serialize(format : String) : String
+      format == "csv" ? to_csv : to_json
+    end
+
+    # Write the results to *path* in *format*, atomically: a sibling temp file
+    # renamed over the target, so a failed or interrupted write never replaces a
+    # good export with a partial one. Raises File::Error on a write failure.
+    def write(path : String, format : String) : Nil
+      tmp = "#{path}.#{Process.pid}.part"
+      begin
+        File.write(tmp, serialize(format))
+        File.rename(tmp, path)
+      rescue ex
+        File.delete?(tmp)
+        raise ex
+      end
+    end
+
     # A CSV cell for untrusted text: sanitized of control and escape sequences,
     # with a leading spreadsheet-formula trigger (=, +, -, @) neutralized by a
     # single quote so opening the export cannot execute a hostile redirect

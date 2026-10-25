@@ -26,6 +26,10 @@ module JekyllHyde
     property depth = 4
     property? no_recursion = false
     property? auto_tune = false
+    # Hyde: operator-supplied reference pages (--filter-similar-to, repeatable).
+    # Each is fetched once and every response that is a near-duplicate of it is
+    # dropped, for noise that does not look like a soft 404.
+    property filter_similar = [] of String
     property? insecure = false
     # Operator request shaping: the HTTP method (-X), raw "Name: Value" headers
     # (-H, repeatable), and a cookie (-b). All sent verbatim; in Jekyll each may
@@ -46,6 +50,9 @@ module JekyllHyde
     property input_mode = Jekyll::Input::Mode::Clusterbomb
     property output : String? = nil
     property format = "json"
+    # Run without the TUI (--headless): results to -o or stdout, progress on
+    # stderr, an exit code for chaining. Needs no terminal, for CI and agents.
+    property? headless = false
     property? mode_set = false
     property? jekyll_used = false
     property? hyde_used = false

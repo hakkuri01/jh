@@ -1,28 +1,29 @@
 require "option_parser"
 require "./scan_config"
+require "./headless"
 require "./view/app"
 require "./jekyll/rule"
 require "./jekyll/rules"
 require "./jekyll/input"
 
 module JekyllHyde
-  # The command-line front door. jh is always the interactive program: with no
-  # arguments it opens the composer; with a full command it parses and validates
-  # the flags here, then launches the same TUI straight onto the running scan
-  # dashboard (the power-user override), skipping the opener and the form. There
-  # is no headless runner, so there is no second code path to keep in step: the
-  # TUI is the program, and a command line is just a pre-filled scan. A parse or
-  # validation problem prints one actionable line and exits non-zero before
-  # anything launches. `run` returns the process exit code.
+  # The command-line front door. With no arguments jh opens the composer; with a
+  # full command it parses and validates the flags here, then either runs the
+  # scan headless (`--headless`: no terminal, results to -o or stdout) or launches
+  # the same TUI straight onto the running dashboard (the power-user override),
+  # skipping the opener and the form. The engine is built once in ScanBuilder, so
+  # the TUI and headless paths cannot drift. A parse or validation problem prints
+  # one actionable line and exits non-zero before anything launches. `run` returns
+  # the process exit code.
   class Entry
     # The HTTP methods `-X` accepts; anything else is refused before launch.
     METHODS = %w[GET HEAD POST PUT DELETE OPTIONS PATCH]
 
-    def self.run(argv : Array(String), io : IO = STDOUT) : Int32
-      new(io).run(argv)
+    def self.run(argv : Array(String), io : IO = STDOUT, err : IO = STDERR) : Int32
+      new(io, err).run(argv)
     end
 
-    def initialize(@io : IO)
+    def initialize(@io : IO, @err : IO = STDERR)
     end
 
     def run(argv : Array(String)) : Int32
@@ -32,17 +33,18 @@ module JekyllHyde
         return 0
       end
       if problem = validate(config)
-        @io.puts "error: #{problem}"
+        @err.puts "error: #{problem}"
         return 2
       end
+      return Headless.run(config, @io, @err) if config.headless?
       unless @io.tty?
-        @io.puts "error: jh runs in an interactive terminal; give it no arguments to compose a scan, or a full command to run one"
+        @err.puts "error: jh needs an interactive terminal; give it no arguments to compose a scan, a full command to run one, or add --headless to run without a terminal"
         return 2
       end
       View::App.launch(config, @io)
       0
     rescue ex : ArgumentError
-      @io.puts "error: #{ex.message}"
+      @err.puts "error: #{ex.message}"
       2
     end
 
@@ -89,6 +91,7 @@ module JekyllHyde
       p.on("--data DATA", "request body, FUZZ-able in Jekyll (implies POST)") { |v| c.body = v }
       p.on("-o FILE", "--output=FILE", "write results to FILE on completion") { |v| c.output = v }
       p.on("--format FMT", "export format: json or csv (default json)") { |v| c.format = v }
+      p.on("--headless", "run without the TUI; results to -o or stdout, progress on stderr") { c.headless = true }
     end
 
     # Jekyll's matcher/filter grammar (one letter per metric), the combination
@@ -141,6 +144,10 @@ module JekyllHyde
         c.auto_tune = true
         c.hyde_used = true
       end
+      p.on("--filter-similar-to URL", "drop pages similar to URL, e.g. a soft 404 (Hyde, repeatable)") do |v|
+        c.filter_similar << v
+        c.hyde_used = true
+      end
     end
 
     # Whether the parsed command is runnable. A mode is mandatory here: a command
@@ -163,10 +170,12 @@ module JekyllHyde
       "method must be one of #{METHODS.join(", ")}" unless METHODS.includes?(c.method)
     end
 
-    # Each -H must look like a header line so it can be parsed and sent.
+    # Each -H must look like a header line so it can be parsed and sent. The bad
+    # line is NOT echoed: a malformed auth header would otherwise leak its token
+    # into the diagnostics (AGENTS secret-handling).
     private def bad_header(c : ScanConfig) : String?
       c.headers.each do |line|
-        return "a header must look like 'Name: Value': #{line}" unless line.includes?(':')
+        return "a header must look like 'Name: Value'" unless line.includes?(':')
       end
       nil
     end
@@ -174,7 +183,7 @@ module JekyllHyde
     # A mode-specific flag used against the other engine.
     private def wrong_mode_flag(c : ScanConfig) : String?
       return "the matcher, filter, and input flags are Jekyll-only (use --jekyll)" if c.mode == "HYDE" && c.jekyll_used?
-      return "--no-recursion and --auto-tune are Hyde-only (use --hyde)" if c.mode == "JEKYLL" && c.hyde_used?
+      return "--no-recursion, --auto-tune, and --filter-similar-to are Hyde-only (use --hyde)" if c.mode == "JEKYLL" && c.hyde_used?
       nil
     end
 
@@ -187,7 +196,7 @@ module JekyllHyde
     end
 
     private def bad_format(c : ScanConfig) : String?
-      return "export format must be json or csv" if c.output && c.format != "json" && c.format != "csv"
+      return "export format must be json or csv" if (c.output || c.headless?) && c.format != "json" && c.format != "csv"
       nil
     end
 

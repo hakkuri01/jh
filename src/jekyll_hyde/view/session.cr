@@ -3,15 +3,10 @@ require "../tui/message"
 require "../core/response"
 require "../core/results"
 require "../http/client"
-require "../wordlist/list"
 require "../hyde/scan"
 require "../jekyll/scan"
-require "../jekyll/input"
-require "../jekyll/rule"
-require "../jekyll/rules"
-require "../jekyll/template"
+require "../scan_builder"
 require "../scan_config"
-require "uri"
 
 # The bridge between a running scan engine and the Elm loop.
 module JekyllHyde::View
@@ -150,7 +145,7 @@ module JekyllHyde::View
 
     private def perform : Nil
       validate_target!
-      scan = build_scan
+      scan = ScanBuilder.build(@config)
       @scan = scan
       results = scan.run(cancel: -> { @cancelled }, pause: -> { @paused }) do |response|
         @channel.send(ScanHitMsg.new(self, response)) unless @cancelled
@@ -167,56 +162,14 @@ module JekyllHyde::View
       @channel.send(ScanFailedMsg.new(self, ex.message || "scan failed")) unless @cancelled
     end
 
-    # Builds the engine for the mode. Both modes expand the wordlist by any
-    # extensions and stream through the same `run(cancel, pause) { }` the loop
-    # drives. This is the one place a scan is assembled, for the form and the
-    # command line alike.
-    private def build_scan : Hyde::Scan | Jekyll::Scan
-      @config.mode == "JEKYLL" ? build_jekyll : build_hyde
-    end
-
-    # Jekyll: one source per `-w` spec (extensions only on the FUZZ source, as
-    # the keyworded sources carry their own tokens), substituted into the FUZZ
-    # template and kept by the matcher/filter rules.
-    private def build_jekyll : Jekyll::Scan
-      sources = @config.wordlists.map do |spec|
-        path, keyword = Jekyll::Source.split(spec)
-        list = Wordlist::List.positional({path})
-        list = list.with_extensions(@config.extensions) if keyword == Jekyll::Template::KEYWORD
-        Jekyll::Source.new(keyword, list)
-      end
-      template = Jekyll::Template.new(@config.url, sources.map(&.keyword))
-      input = Jekyll::Input.new(sources, @config.input_mode)
-      options = Http::Options.jekyll(verify_tls: !@config.insecure?, method: @config.method, headers: @config.request_headers, body: @config.body)
-      Jekyll::Scan.new(template, input, options, concurrency: @config.threads, rules: jekyll_rules, auto_calibrate: @config.calibrate?)
-    end
-
-    # Hyde: recurse from the origin with one deduplicated wordlist; --no-recursion
-    # caps the walk at the target itself.
-    private def build_hyde : Hyde::Scan
-      paths = @config.wordlists.map { |spec| Jekyll::Source.split(spec)[0] }
-      list = Wordlist::List.deduplicated(paths).with_extensions(@config.extensions)
-      depth = @config.no_recursion? ? 1 : @config.depth
-      options = Http::Options.hyde(verify_tls: !@config.insecure?, method: @config.method, headers: @config.request_headers, body: @config.body)
-      Hyde::Scan.new(@config.url, list, options, concurrency: @config.threads, max_depth: depth, auto_tune: @config.auto_tune?)
-    end
-
-    # The rules from the parsed matchers and filters; with no matcher given, the
-    # default status matcher stands in so a bare scan still keeps real hits.
-    private def jekyll_rules : Jekyll::Rules
-      matchers = @config.matchers.empty? ? [Jekyll::Rule.build("status", Jekyll::Rules::DEFAULT_STATUS)] : @config.matchers
-      Jekyll::Rules.new(matchers, @config.filters, matcher_mode: @config.matcher_mode, filter_mode: @config.filter_mode)
-    end
-
     # Write the results to the -o path when one is set and the scan finished on
     # its own, returning a one-line notice if the write fails (the hits are
     # already on the dashboard, so a bad path is surfaced, not fatal).
     private def export(results : Core::Results) : String?
       path = @config.output
       return nil unless path
-      data = @config.format == "csv" ? results.to_csv : results.to_json
       begin
-        write_atomic(path, data)
+        results.write(path, @config.format)
         nil
       rescue File::Error
         # No absolute path in the message (AGENTS Security 7); on-screen results stay.
@@ -224,27 +177,11 @@ module JekyllHyde::View
       end
     end
 
-    # Write to a sibling temp file and rename over the target, so a failed or
-    # interrupted write never replaces a good export with a partial one.
-    private def write_atomic(path : String, data : String) : Nil
-      tmp = "#{path}.#{Process.pid}.part"
-      begin
-        File.write(tmp, data)
-        File.rename(tmp, path)
-      rescue ex
-        File.delete?(tmp)
-        raise ex
-      end
-    end
-
     # Validate the operator-supplied target before any request fiber starts, so a
     # malformed URL fails as one clean line here (caught below) instead of each
     # pool worker raising an unhandled exception that corrupts the TUI.
     private def validate_target! : Nil
-      uri = URI.parse(@target)
-      host = uri.host
-      return if (uri.scheme == "http" || uri.scheme == "https") && host && !host.empty?
-      raise ArgumentError.new("not a valid URL; use http://host or https://host")
+      raise ArgumentError.new("not a valid URL; use http://host or https://host") unless Http.valid_url?(@target)
     end
   end
 end

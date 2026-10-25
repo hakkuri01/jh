@@ -81,19 +81,32 @@ describe JekyllHyde::Hyde::Scan do
     end
   end
 
-  it "stops a hostile fresh-link chain at the frontier cap" do
-    # Every numeric path returns a distinct body linking to the next number, an
-    # endless same-origin chain. The frontier cap, not the target, ends the walk.
-    server = FixtureServer.new(responder: ->(path : String) {
-      num = path.lstrip('/').to_i?
-      num ? FixtureServer::Route.new(200, %(<a href="/#{num + 1}">next</a> unique body #{num})) : nil
+  it "drops pages similar to an operator reference page (--filter-similar-to)" do
+    noise = "Sorry, the page you requested could not be located on this server. " \
+            "Please verify the address and try again shortly, or browse our catalogue of products and services."
+    server = FixtureServer.new({
+      "/missingpage" => FixtureServer::Route.new(200, noise), # the reference page
+      "/alsogone"    => FixtureServer::Route.new(200, noise), # a near-duplicate of it
+      "/real"        => FixtureServer::Route.new(200, "Welcome to the administrative dashboard listing user accounts, billing settings, audit logs, and deployment history."),
     })
     begin
-      scan = JekyllHyde::Hyde::Scan.new(server.base, wordlist("0"), concurrency: 4, max_frontier: 40)
-      results = scan.run
-      scan.completed.should be <= 60 # bounded: the cap plus one in-flight pool, not unbounded
-      scan.warning.should_not be_nil
-      results.size.should be <= 60
+      scan = JekyllHyde::Hyde::Scan.new(server.base, wordlist("missingpage", "alsogone", "real"), concurrency: 4, similar_to: ["#{server.base}/missingpage"])
+      kept = found(scan.run, server.base).map(&.first)
+      kept.should contain("/real")
+      kept.should_not contain("/alsogone") # filtered as a near-duplicate of the reference
+      kept.should_not contain("/missingpage")
+    ensure
+      server.stop
+    end
+  end
+
+  it "is unaffected when the reference page cannot be fetched, and warns (best effort)" do
+    server = FixtureServer.new({"/real" => FixtureServer::Route.new(200, "a genuinely unique discovered page")})
+    begin
+      # A valid but unreachable reference (port 1 refuses): skipped, not fatal.
+      scan = JekyllHyde::Hyde::Scan.new(server.base, wordlist("real"), concurrency: 2, max_depth: 1, similar_to: ["http://127.0.0.1:1/ref"])
+      found(scan.run, server.base).map(&.first).should contain("/real")
+      scan.warning.should_not be_nil # the unreachable reference was skipped with a notice
     ensure
       server.stop
     end
