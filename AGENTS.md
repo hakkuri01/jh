@@ -4,6 +4,12 @@ Working rules for AI coding agents on this project.
 
 ## Mandatory Rules
 
+### Development Environment
+
+Enter the project dev shell with `nix develop` before beginning work. Run all
+project development tools from that shell rather than using environment-level
+toolchains.
+
 ### Algorithmic Complexity (Big O)
 
 **Complexity is a builder step.** Run it on every change and in every review: name what grows,
@@ -221,10 +227,8 @@ into `verify` later.
   `format = "crystal"` with no dependency materialization: none of the usual
   `crystal2nix` / `shards.nix` / drift-gate machinery is needed. That whole class
   of upkeep is what the stdlib-only rule buys us.
-- **Crystal is pinned in the flake.** nixpkgs lags our `>= 1.21.1`, so the flake
-  overrides the compiler's source to 1.21.1 (with guards, and the 1.21 man-page
-  `installPhase` workaround). Drop the override and use `pkgs.crystal` once
-  nixpkgs ships `>= 1.21.1`.
+- **Crystal comes from the locked nixpkgs input.** Keep that input on a Crystal
+  version satisfying `shard.yml` and `mise.toml`.
 - **`doCheck = false`.** The spec suite binds a loopback socket (the parity
   fixture); it must not run in the sandboxed Nix build.
 - **Source is an allowlist** (`lib.fileset.toSource`): `src`, `data`, `shard.yml`,
