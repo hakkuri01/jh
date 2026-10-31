@@ -192,4 +192,22 @@ describe JekyllHyde::Entry do
     err.should_not contain("FUZZ keyword")
     err.should contain("interactive terminal")
   end
+
+  it "refuses a non-numeric thread count instead of silently keeping the default" do
+    code, _, err = run_cli(["--hyde", "-u", "http://host/", "-w", "x", "-t", "lots"])
+    code.should eq(2)
+    err.should contain("-t needs a whole number")
+  end
+
+  it "refuses a non-numeric recursion depth" do
+    code, _, err = run_cli(["--hyde", "-u", "http://host/", "-w", "x", "-d", "deep"])
+    code.should eq(2)
+    err.should contain("-d needs a whole number")
+  end
+
+  it "refuses a negative recursion depth (0 is the unlimited value)" do
+    code, _, err = run_cli(["--hyde", "-u", "http://host/", "-w", "x", "--depth=-1"])
+    code.should eq(2)
+    err.should contain("cannot be negative")
+  end
 end

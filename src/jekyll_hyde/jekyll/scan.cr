@@ -61,11 +61,9 @@ module JekyllHyde::Jekyll
       perform
     end
 
-    # Stream each kept result to *on_result* as it is found, stopping early when
-    # *cancel* returns true and holding while *pause* returns true (both checked
-    # as the pool feeds, so each takes effect within one pool of in-flight
-    # requests): the TUI streams results into the Elm loop, q stops the scan, and
-    # p holds it without leaving requests hammering the target.
+    # Stream each kept result to *on_result* as found, stopping when *cancel* turns
+    # true and holding while *pause* does (both checked as the pool feeds, so each
+    # takes effect within one pool of in-flight requests).
     def run(cancel : Proc(Bool)? = nil, pause : Proc(Bool)? = nil, &on_result : Core::Response ->) : Core::Results
       @on_result = on_result
       @cancel = cancel

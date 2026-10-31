@@ -1,4 +1,5 @@
 require "../render/grid"
+require "../version"
 
 # The persistent cyberpunk HUD chrome.
 module JekyllHyde::View
@@ -25,10 +26,9 @@ module JekyllHyde::View
       grid
     end
 
-    # The top-left identity cluster. The active mode's word takes the accent; the
-    # inactive one greys out, a second cue to which engine is live. Its inner rail
-    # ends at *cap*, the mirror of the bottom cluster's cap, so the two diagonals
-    # stay symmetric.
+    # The top-left identity cluster: the active mode's word takes the accent, the
+    # inactive one greys out. Its inner rail ends at *cap*, the mirror of the
+    # bottom cluster's cap, so the two diagonals stay symmetric.
     private def top_left(grid : Render::Grid, accent : Render::RGB, mode : String, cap : Int32) : Nil
       cols, rows = grid.cols, grid.rows
       main = Math.min(cols - 2, cols * 11 // 20)
@@ -40,10 +40,12 @@ module JekyllHyde::View
       grid.text(1, 4, "JEKYLL", mode == "JEKYLL" ? accent : Render::MUTED)
       grid.text(1, 11, "∕∕", accent)
       grid.text(1, 14, "HYDE", mode == "HYDE" ? accent : Render::MUTED)
-      grid.text(1, 19, "· v0.1", Render::MUTED)
-      grid.put(1, 26, '├', accent)
-      len = Math.max(cap - 26, 3)
-      grid.rail(1, 27, len, color: accent, solid: len * 3 // 5, dir: 1)
+      version = "· v#{JekyllHyde::VERSION}"
+      grid.text(1, 19, version, Render::MUTED)
+      close = 20 + version.size
+      grid.put(1, close, '├', accent)
+      len = Math.max(cap - close, 3)
+      grid.rail(1, close + 1, len, color: accent, solid: len * 3 // 5, dir: 1)
       grid.vrail(2, 0, Math.min(rows - 3, rows * 2 // 5), color: accent, solid: 5, dir: 1)
     end
 
@@ -60,12 +62,9 @@ module JekyllHyde::View
       grid.rtext(rows - 4, edge - 4, readout.status, readout.status_on ? accent : Render::MUTED)
     end
 
-    # The header rail: a `┤ cheatsheet ├` and, in the cockpit, a
-    # `┤ NORMAL/INSERT ├` mode bracket. The rail runs solid from the `┫` corner
-    # through a fixed-width mode slot (left as plain rail on the opener, where
-    # there is no vim mode yet, so the bracket can later slot in without shifting
-    # the cheatsheet) to the cheatsheet, then dashes out to a `▰▰▱` cap. The
-    # bottom is the reference for the diagonal; the top mirrors `header_cap`.
+    # The header rail: a `┤ cheatsheet ├` and, in the cockpit, a `┤ NORMAL/INSERT ├`
+    # mode bracket, running solid from the `┫` corner out to a `▰▰▱` cap. The bottom
+    # is the reference for the diagonal; the top mirrors `header_cap`.
     private def header_rail(grid : Render::Grid, accent : Render::RGB, readout : Readout) : Nil
       cols, row, edge = grid.cols, grid.rows - 2, grid.cols - 1
       rail = Render.dim(accent, 0.5)
@@ -75,22 +74,20 @@ module JekyllHyde::View
       if readout.header.empty?
         (mode_open..edge - 1).each { |col| grid.put(row, col, '━', accent) }
       else
-        bracket(grid, row, mode_open, readout.header, readout.header_on ? accent : Render::TEXT, accent)
+        bracket(grid, row, mode_open, readout.header, label_color: readout.header_on ? accent : Render::TEXT, accent: accent)
         ((mode_open + 4 + readout.header.size)..(edge - 1)).each { |col| grid.put(row, col, '━', accent) }
       end
       3.times { |offset| grid.put(row, mode_open - 1 - offset, '━', accent) }
       cheat_open = mode_open - 4 - readout.hint.size - 3
-      bracket(grid, row, cheat_open, readout.hint, Render::MUTED, accent)
+      bracket(grid, row, cheat_open, readout.hint, label_color: Render::MUTED, accent: accent)
       cap = header_cap(cols, readout.hint.size)
       (cap + 3...cheat_open).each { |col| grid.put(row, col, '╍', rail) }
       {'▰', '▰', '▱'}.each_with_index { |glyph, offset| grid.put(row, cap + 2 - offset, glyph, accent) }
     end
 
-    # The bottom cluster's inner-rail `▱` cap column: its design offset, pulled
-    # left of the cheatsheet when one would overlap. The top cluster mirrors this
-    # (`cols - 1 - header_cap`), so the two diagonals stay symmetric for any
-    # terminal width and cheatsheet, a locked invariant, with the bottom as the
-    # reference.
+    # The bottom cluster's inner-rail `▱` cap column, pulled left of the cheatsheet
+    # when one would overlap. The top cluster mirrors this (`cols - 1 - header_cap`)
+    # so the two diagonals stay symmetric at any width, a locked invariant.
     private def header_cap(cols : Int32, hint : Int32) : Int32
       edge = cols - 1
       cheat_open = edge - 18 - hint
@@ -100,7 +97,7 @@ module JekyllHyde::View
 
     # `┤ label ├` opening at column *open*: the bracket, a space, the label, a
     # space, the closing bracket.
-    private def bracket(grid : Render::Grid, row : Int32, open : Int32, label : String, label_color : Render::RGB, accent : Render::RGB) : Nil
+    private def bracket(grid : Render::Grid, row : Int32, open : Int32, label : String, *, label_color : Render::RGB, accent : Render::RGB) : Nil
       grid.put(row, open, '┤', accent)
       grid.text(row, open + 2, label, label_color)
       grid.put(row, open + 3 + label.size, '├', accent)

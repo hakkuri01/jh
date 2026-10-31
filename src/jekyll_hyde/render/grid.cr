@@ -50,21 +50,23 @@ module JekyllHyde::Render
     property placement : Placement? = nil
 
     def initialize(@cols : Int32, @rows : Int32)
+      # The nil casts fix each cell's type as Cell ({Char, RGB?, RGB?}); without
+      # them the literal infers {Char, Nil, Nil}, which cannot later hold a color.
       @cells = Array.new(@rows) { Array.new(@cols) { {' ', nil.as(RGB?), nil.as(RGB?)} } }
     end
 
-    def put(row : Int32, col : Int32, glyph : Char, color : RGB?, background : RGB? = nil) : Nil
+    def put(row : Int32, col : Int32, glyph : Char, color : RGB?, *, background : RGB? = nil) : Nil
       return unless 0 <= row < @rows && 0 <= col < @cols
       @cells[row][col] = {glyph, color, background}
     end
 
-    def text(row : Int32, col : Int32, str : String, color : RGB?, background : RGB? = nil) : Nil
-      str.each_char_with_index { |glyph, offset| put(row, col + offset, glyph, color, background) }
+    def text(row : Int32, col : Int32, str : String, color : RGB?, *, background : RGB? = nil) : Nil
+      str.each_char_with_index { |glyph, offset| put(row, col + offset, glyph, color, background: background) }
     end
 
     # *str* placed so its last character sits at column *endcol*.
-    def rtext(row : Int32, endcol : Int32, str : String, color : RGB?, background : RGB? = nil) : Nil
-      text(row, endcol - str.size + 1, str, color, background)
+    def rtext(row : Int32, endcol : Int32, str : String, color : RGB?, *, background : RGB? = nil) : Nil
+      text(row, endcol - str.size + 1, str, color, background: background)
     end
 
     # Paints *background* across *len* cells from *col*, keeping each cell's

@@ -21,6 +21,28 @@ module JekyllHyde::Http
     false
   end
 
+  # Percent-encode only the bytes that would break the request line in a
+  # page-authored path segment (a Hyde wordlist word): space, C0 controls, DEL.
+  # Path-structural bytes (/ ? # % .) are kept, matching feroxbuster's Url::join.
+  # The one home for "is this byte safe in a request target" (AGENTS Security 2, 9).
+  def self.request_token(value : String) : String
+    return value unless value.each_byte.any? { |byte| unsafe_in_request?(byte) }
+    String.build do |io|
+      value.each_byte do |byte|
+        if unsafe_in_request?(byte)
+          io << '%' << byte.to_s(16, upcase: true).rjust(2, '0')
+        else
+          io.write_byte(byte)
+        end
+      end
+    end
+  end
+
+  # Space, the C0 controls, and DEL: the bytes a request target cannot carry raw.
+  def self.unsafe_in_request?(byte : UInt8) : Bool
+    byte <= 0x20 || byte == 0x7F
+  end
+
   # Per-request knobs. `Options.new` is the neutral default (10s, 5 MB); each mode
   # builds its own values through `.jekyll` / `.hyde`. Timeouts are in seconds.
   # *method*, *headers*, and *body* carry the operator's `-X`/`-H`/`-b`/`--data`
@@ -74,15 +96,26 @@ module JekyllHyde::Http
     def fetch(request : Request) : Outcome
       headers = merged_headers(request.headers)
       started = Time.instant
-      outcome = @http.exec(request.method, request.path, headers, request.body) { |response| read_outcome(response) }
-      elapsed = Time.instant - started
+      outcome = @http.exec(request.method, request.path, headers, request.body) do |response|
+        read_outcome(response, started)
+      end
       # A truncated read left bytes unread on the socket; Crystal reuses a
       # keep-alive connection, and leftover body corrupts the next request on it
       # (verified), so drop the connection rather than reuse or drain it (draining
       # a hostile body past the cap is the DoS the cap exists to stop).
       @http.close if outcome.truncated
-      outcome.copy_with(duration: elapsed)
-    rescue ex : IO::Error | OpenSSL::SSL::Error
+      outcome
+    rescue ex : Error
+      # A time-budget abort mid-body left bytes unread on the socket; drop the
+      # connection so this worker's next request reconnects cleanly.
+      @http.close
+      raise ex
+    rescue ex
+      # Any other failure to get a valid response from an untrusted peer (a
+      # connect, TLS, or idle-timeout error, or a malformed status line the stdlib
+      # rejects with a bare Exception) becomes one clean per-request Error at this
+      # single network boundary, so a direct fetch (robots.txt, a reference page)
+      # cannot abort the whole scan on a hostile reply (AGENTS Security 9).
       raise Error.new("#{request.path}: #{ex.message}")
     end
 
@@ -114,9 +147,15 @@ module JekyllHyde::Http
 
     # Read at most max_body_size + 1 bytes: enough to detect overflow, never
     # enough to buffer a hostile body past the cap. One O(n) pass over a bounded
-    # length (AGENTS Big O, text-from-outside).
-    private def read_outcome(response : HTTP::Client::Response) : Outcome
+    # length (AGENTS Big O, text-from-outside). *started* is the request's start
+    # instant, so the whole request is held to a time budget, not just each read.
+    private def read_outcome(response : HTTP::Client::Response, started : Time::Instant) : Outcome
+      # Time to first response byte: this block runs once the headers are parsed,
+      # before the body read, matching ffuf's resp.Duration so a slow body does
+      # not inflate the time a --mt/--ft rule sees.
+      ttfb = Time.instant - started
       cap = @options.max_body_size
+      budget = @options.read_timeout.seconds
       buffer = IO::Memory.new
       total = 0
       # A HEAD, 204, or 304 response has no body to stream; body_io? is nil there,
@@ -128,6 +167,11 @@ module JekyllHyde::Http
           buffer.write(chunk[0, take])
           total += take
           break if total > cap
+          # Whole-request time budget (ffuf and feroxbuster bound the entire
+          # request, not just each idle read): a hostile peer that trickles bytes
+          # just under the idle read timeout would otherwise hold a worker until
+          # it reaches the body cap. One monotonic check per chunk.
+          raise Error.new("response exceeded the time budget") if Time.instant - started > budget
         end
       end
       truncated = total > cap
@@ -137,15 +181,17 @@ module JekyllHyde::Http
         body: body,
         truncated: truncated,
         location: response.headers["Location"]?,
-        content_type: response.content_type,
         headers: header_blob(response.headers),
+        duration: ttfb,
       )
     end
 
     # The response headers serialized for the regex rule, one "Name: value\r\n"
-    # per value, bounded by HEADER_CAP so a hostile server cannot make this
-    # unbounded (AGENTS Big O, text-from-outside). Crystal has already decoded
-    # them to valid UTF-8, so no scrub is needed here.
+    # per value. The stdlib already bounds the header block it parses (16 KiB), so
+    # HEADER_CAP is a second belt on the serialized copy, not the tight bound
+    # (AGENTS Big O, text-from-outside). The bytes are NOT guaranteed valid UTF-8
+    # (a header value may carry a raw 0x80..0xFF byte), so the regex rule scrubs
+    # the headers and body together before matching; no scrub is needed here.
     HEADER_CAP = 65_536
 
     private def header_blob(headers : HTTP::Headers) : String

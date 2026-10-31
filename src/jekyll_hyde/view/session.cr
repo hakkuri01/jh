@@ -87,8 +87,10 @@ module JekyllHyde::View
       channel, session = @channel, self
       Tui::Cmd.new do
         select
-        when msg = channel.receive
-          msg
+        when msg = channel.receive?
+          # nil means the channel closed on cancel; a tick is harmless (the app
+          # ignores it for the superseded session). .as widens both arms to Tui::Msg.
+          msg || ScanTickMsg.new(session).as(Tui::Msg)
         when timeout(frame)
           ScanTickMsg.new(session).as(Tui::Msg)
         end
@@ -130,6 +132,11 @@ module JekyllHyde::View
     # the UI fiber and read on the scan fiber only at yield points.
     def cancel : Nil
       @cancelled = true
+      # Wake a scan fiber parked in a full-channel send: with the UI no longer
+      # pulling results, that send would never return and the whole request pool
+      # and its sockets would stay parked for the process life (F-19). Closing
+      # makes the parked send raise, which the pool turns into a clean drain.
+      @channel.close
     end
 
     # Hold or resume the scan: while paused the engine's feed stops sending new
@@ -144,16 +151,16 @@ module JekyllHyde::View
     end
 
     private def perform : Nil
-      validate_target!
       scan = ScanBuilder.build(@config)
       @scan = scan
       results = scan.run(cancel: -> { @cancelled }, pause: -> { @paused }) do |response|
         @channel.send(ScanHitMsg.new(self, response)) unless @cancelled
       end
-      unless @cancelled
-        @export_warning = export(results)
-        @channel.send(ScanDoneMsg.new(self))
-      end
+      # Export whatever was found, even when q stopped the scan early: the hits
+      # are real and the operator asked for an -o file (ffuf and feroxbuster both
+      # finalize output on interrupt).
+      @export_warning = export(results)
+      @channel.send(ScanDoneMsg.new(self)) unless @cancelled
     rescue ex : File::Error
       # A wordlist that cannot be read: one clean line, no absolute path
       # (AGENTS Security 7). The export path's own failures are handled in export.
@@ -175,13 +182,6 @@ module JekyllHyde::View
         # No absolute path in the message (AGENTS Security 7); on-screen results stay.
         "could not write results to #{Path[path].basename}"
       end
-    end
-
-    # Validate the operator-supplied target before any request fiber starts, so a
-    # malformed URL fails as one clean line here (caught below) instead of each
-    # pool worker raising an unhandled exception that corrupts the TUI.
-    private def validate_target! : Nil
-      raise ArgumentError.new("not a valid URL; use http://host or https://host") unless Http.valid_url?(@target)
     end
   end
 end

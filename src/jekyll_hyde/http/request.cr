@@ -9,10 +9,9 @@ module JekyllHyde::Http
   # substitutes per combination; in Hyde the method, headers, and body are static
   # across the walk.
   record Request, method : String, path : String, headers : HTTP::Headers, body : String? = nil do
-    # Parse raw "Name: Value" lines (as supplied by `-H`, and the folded `-b`
-    # cookie) into HTTP::Headers, splitting on the first colon so a value may
-    # itself contain one. A line without a colon or with an empty name is
-    # skipped; the command line validates the shape before the engine sees it.
+    # Parse raw "Name: Value" lines (`-H`, and the folded `-b` cookie) into
+    # HTTP::Headers, splitting on the first colon so a value may contain one. A
+    # line with no colon or an empty name is skipped (the CLI validates the shape).
     def self.headers_from(raw : Enumerable(String)) : HTTP::Headers
       headers = HTTP::Headers.new
       raw.each do |line|

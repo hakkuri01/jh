@@ -78,10 +78,9 @@ module JekyllHyde::Tui
       end
     end
 
-    # Overwrites, with spaces, the placeholder cells the previous image left
-    # where the new frame no longer covers them, so a face that lifts or clears
-    # leaves no ghost. A clear handles everything, and a growing reveal (same
-    # box, more rows) vacates nothing.
+    # Overwrites with spaces the placeholder cells the previous image left where
+    # the new frame no longer covers them, so a face that lifts or clears leaves no
+    # ghost. A growing reveal (same box, more rows) vacates nothing.
     private def clear_vacated(io : IO, current : Render::Placement?, full : Bool) : Nil
       old = @placement
       return if full || old.nil? || old == current

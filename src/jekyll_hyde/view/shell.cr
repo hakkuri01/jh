@@ -2,6 +2,7 @@ require "../render/grid"
 require "../render/logo"
 require "./hud"
 require "./scene"
+require "./text"
 
 # The composition cockpit.
 module JekyllHyde::View
@@ -124,12 +125,14 @@ module JekyllHyde::View
       fs = fields(state.mode)
       card_w = Math.min(canvas.cols - 8, CARD_MAX)
       left = (canvas.cols - card_w) // 2
-      lines = wrap_command(command_segments(state), Math.max(card_w - 8, 1))
+      lines = wrapped_command(state, Math.max(card_w - 8, 1))
       pl = plan(canvas.rows, fs, lines.size)
       accent = Render.accent(state.mode)
       box(grid, {pl.top, left, card_w, pl.height}, accent)
       place_logo(grid, canvas, {pl.logo_top, left, card_w})
-      pl.dividers.each { |entry| divider(grid, {entry[0], left, card_w}, entry[1], accent) }
+      # Each group header is the shared section rail, inset to the field tree's
+      # spine so its ┏ connects down to the ┣/┗ of the fields below.
+      pl.dividers.each { |entry| Text.section_rail(grid, {entry[0], left + 4, left + card_w - 4}, entry[1], accent) }
       tree = !pl.dividers.empty?
       pl.fields.each_with_index do |row, index|
         field = fs[index]
@@ -195,21 +198,6 @@ module JekyllHyde::View
         grid.put(top + rivet, left, '◈', accent)
         grid.put(top + rivet, right, '◈', accent)
       end
-    end
-
-    # A heavy section header rooted at the field tree's spine: ┏━┫ LABEL ┣━━…,
-    # the ┏ connecting down to the ┣/┗ of the fields below. *geom* is
-    # {row, left, width}.
-    private def divider(grid : Render::Grid, geom : Tuple(Int32, Int32, Int32), label : String, accent : Render::RGB) : Nil
-      row, left, width = geom
-      line = Render.dim(accent, 0.55)
-      spine = left + 4
-      grid.put(row, spine, '┏', line)
-      grid.put(row, spine + 1, '━', line)
-      grid.put(row, spine + 2, '┫', line)
-      grid.text(row, spine + 4, label, accent)
-      grid.put(row, spine + 5 + label.size, '┣', line)
-      (spine + 6 + label.size..left + width - 4).each { |col| grid.put(row, col, '━', Render.dim(accent, 0.3)) }
     end
 
     # The logo inside the panel, centered, when the terminal shows images.
@@ -327,8 +315,23 @@ module JekyllHyde::View
       end
     end
 
+    # The wrapped command for this form, built once per change and reused by every
+    # repainting frame: it depends only on the mode, the field values, and the
+    # panel width, so quoting, flattening to styled cells, and wrapping all stay
+    # off the frame (AGENTS Big O 5). A hit allocates nothing: the key is a tuple
+    # (a value type) compared element-wise, and only a miss dups the values.
+    @@wrapped = [] of Array(Tuple(Char, Render::RGB))
+    @@wrapped_for : Tuple(String, Int32, Array(String)) = {"", -1, [] of String}
+
+    private def wrapped_command(state : State, width : Int32) : Array(Array(Tuple(Char, Render::RGB)))
+      return @@wrapped if @@wrapped_for == {state.mode, width, state.values}
+      @@wrapped_for = {state.mode, width, state.values.dup}
+      @@wrapped = wrap_command(command_segments(state), width)
+    end
+
     # jh, the mode flag, then each field that carries data; a flag appears only
     # once its field holds a value, so the command builds up as the form fills.
+    # Values are shell-quoted (`Process.quote_posix`) so the line stays runnable.
     private def command_segments(state : State) : Array(Tuple(String, Render::RGB))
       accent = Render.accent(state.mode)
       jekyll = state.mode == "JEKYLL"
@@ -337,7 +340,7 @@ module JekyllHyde::View
         value = state.values[index]
         next if value.empty?
         segments << {field.flag, Render::MUTED}
-        segments << {value, Render::TEXT}
+        segments << {Process.quote_posix(value), Render::TEXT}
       end
       segments
     end

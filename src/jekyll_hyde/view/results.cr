@@ -88,9 +88,8 @@ module JekyllHyde::View
     end
 
     # How many result rows the dashboard shows at a terminal *height*: the frame
-    # less the top cluster and the divider plus column header above the list, and
-    # the footer plus frame margin below it. The App clamps the scroll offset to
-    # this, and the panel draws exactly this many rows, so the two never drift.
+    # less the top cluster, divider, and column header above, and the footer and
+    # margin below. The App clamps the scroll to this; the panel draws this many.
     def capacity(height : Int32) : Int32
       Math.max(0, height - (PANEL_TOP + 6))
     end
@@ -154,33 +153,21 @@ module JekyllHyde::View
       end
       cap = capacity(canvas.rows)
       rows_top = top + 2
-      divider(grid, {top, left, right}, accent)
-      overflow(grid, top, right, state, cap)
+      Text.section_rail(grid, {top, left, right}, "RESULTS", accent)
+      overflow(grid, top, right, state, cap: cap)
       column_header(grid, top + 1, left, accent)
-      rows(grid, {rows_top, rows_top + cap - 1}, Columns.new(left, right, state.target, accent), state.hits, state.scroll)
+      rows(grid, {rows_top, rows_top + cap - 1}, Columns.new(left, right, state.target, accent), state)
       footer(grid, {rows_top + cap, left, right}, state)
     end
 
     # A right-aligned position readout on the section rail when the run is taller
     # than the dashboard, so a long scan is visibly scrollable rather than silently
     # clipped: the newest-first rank range on screen, out of the total.
-    private def overflow(grid : Render::Grid, row : Int32, right : Int32, state : State, cap : Int32) : Nil
+    private def overflow(grid : Render::Grid, row : Int32, right : Int32, state : State, *, cap : Int32) : Nil
       total = state.hits.size
       return if cap <= 0 || total <= cap
       offset = state.scroll.clamp(0, total - cap)
       grid.rtext(row, right, " #{offset + 1}-#{offset + cap} of #{total} ", Render::MUTED)
-    end
-
-    # The section rail `┏━┫ RESULTS ┣━━…`, the spine the result nodes hang from.
-    private def divider(grid : Render::Grid, geom : Tuple(Int32, Int32, Int32), accent : Render::RGB) : Nil
-      row, left, right = geom
-      rail = Render.dim(accent, 0.55)
-      grid.put(row, left, '┏', rail)
-      grid.put(row, left + 1, '━', rail)
-      grid.put(row, left + 2, '┫', rail)
-      grid.text(row, left + 4, "RESULTS", accent)
-      grid.put(row, left + 12, '┣', rail)
-      (left + 13..right).each { |col| grid.put(row, col, '━', Render.dim(accent, 0.3)) }
     end
 
     # The column labels, with the spine `┃` continuing the tree down to the rows.
@@ -196,8 +183,9 @@ module JekyllHyde::View
     # The window of hits that fits, newest-first, scrolled back by *scroll* rows
     # and clamped so it never runs off either end; each row is a node on the
     # spine (`┣━◈`, the last `┗━◈`).
-    private def rows(grid : Render::Grid, vert : Tuple(Int32, Int32), cols : Columns, hits : Array(Core::Response), scroll : Int32) : Nil
+    private def rows(grid : Render::Grid, vert : Tuple(Int32, Int32), cols : Columns, state : State) : Nil
       top, bottom = vert
+      hits, scroll = state.hits, state.scroll
       limit = bottom - top + 1
       return if limit <= 0 || hits.empty?
       offset = scroll.clamp(0, Math.max(0, hits.size - limit))
@@ -219,7 +207,8 @@ module JekyllHyde::View
       grid.rtext(at, cols.left + SIZE_END, hit.size.to_s, Render::TEXT)
       grid.rtext(at, cols.left + WORDS_END, hit.words.to_s, Render::MUTED)
       grid.rtext(at, cols.left + LINES_END, hit.lines.to_s, Render::MUTED)
-      path = Text.clip(Core.sanitize(path_of(hit, cols.target)), cols.right - (cols.left + PATH) + 1)
+      width = cols.right - (cols.left + PATH) + 1
+      path = Text.clip(Core.sanitize(path_of(hit, cols.target), width + 1), width)
       grid.text(at, cols.left + PATH, path, directoryish?(hit) ? cols.accent : Render::TEXT)
     end
 
@@ -250,11 +239,19 @@ module JekyllHyde::View
       end
     end
 
-    # The path shown for a hit: the target stripped off when present, so a row
-    # reads as `/admin` rather than the whole URL; an exact target hit shows `/`.
+    # The path shown for a hit: the target stripped off at a path boundary, so a
+    # row reads `/admin`, an exact hit shows `/`, and a target that only prefixes a
+    # longer path (`/app` vs `/apples`) shows the full URL, not `les`.
+    # ponytail: this runs per visible row per frame, so it is one tail slice over
+    # a URL bounded by Extractor::MAX_LINK_BYTES (8 KiB), inside a window bounded
+    # by the terminal height, never over the result set. Measured flat in URL
+    # length (0.10 ms/frame at 34 rows for 40-char and 8 KiB URLs alike, against a
+    # 33 ms budget), since the caller's sanitize is already capped to the column
+    # width. Precompute off the frame only if that headroom disappears.
     private def path_of(hit : Core::Response, target : String) : String
       return hit.url unless hit.url.starts_with?(target)
       rel = hit.url[target.size..]
+      return hit.url unless rel.empty? || rel.starts_with?("/")
       rel.empty? ? "/" : rel
     end
 

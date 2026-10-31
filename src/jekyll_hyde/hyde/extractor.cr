@@ -23,6 +23,17 @@ module JekyllHyde::Hyde
     # segments is capped here: beyond this, only the full path is kept, no parents
     # (AGENTS Big O 6, text-from-outside). Real paths are nowhere near this.
     MAX_PATH_SEGMENTS = 100
+    # The most links one response body yields. A hostile page can pack a
+    # body-cap-sized body with unique links; without a cap here, extract would
+    # expand every one into sub-paths and build a multi-million-entry set before
+    # the scan applied any limit, so the cap bounds the work, not just the queue
+    # (AGENTS Big O 6). 500 is feroxbuster's effective per-response breadth.
+    MAX_LINKS = 500
+    # The longest a single page-authored link may be. A body-cap-sized single
+    # segment slips past MAX_PATH_SEGMENTS (it has one segment), so its byte length
+    # is capped before it ever reaches the request line, the result set, or a
+    # per-frame sanitize on the dashboard (AGENTS Big O 6, line-length cap).
+    MAX_LINK_BYTES = 8_192
 
     # The LinkFinder regex (GerbenJavado/LinkFinder): quoted URL and endpoint-like
     # strings, extended mode, group 1 without the quotes. The single-quoted
@@ -60,13 +71,13 @@ module JekyllHyde::Hyde
       @host = URI.parse(@origin).host || ""
     end
 
-    # The in-scope paths *body* references (resolved against *from*, the path it
-    # was served at), each expanded to its parent sub-paths. Paths are origin
-    # relative; a directory keeps its trailing slash, the deepest leaf does not.
+    # The in-scope paths *body* references (resolved against *from*), each expanded
+    # to its parent sub-paths. Scanning stops at MAX_LINKS, so one hostile body
+    # cannot drive an unbounded set before the scan sees it.
     def extract(body : String, from : String) : Set(String)
       links = Set(String).new
-      body.scan(ATTRIBUTE) { |match| add(match[1], from, links) }
-      body.scan(LINKFINDER) { |match| add(match[1], from, links) }
+      body.scan(ATTRIBUTE) { |match| break if links.size >= MAX_LINKS; add(match[1], from, links) }
+      body.scan(LINKFINDER) { |match| break if links.size >= MAX_LINKS; add(match[1], from, links) }
       links
     end
 
@@ -81,7 +92,7 @@ module JekyllHyde::Hyde
     end
 
     private def add(link : String, from : String, links : Set(String)) : Nil
-      return if link.empty?
+      return if link.empty? || link.bytesize > MAX_LINK_BYTES
       path = scoped_path(link, from)
       return unless path
       sub_paths(path).each { |sub| links << "/#{sub}" }
@@ -92,12 +103,25 @@ module JekyllHyde::Hyde
       candidate = link.starts_with?("//") ? "http:#{link}" : link
       if candidate =~ %r{\Ahttps?://}i
         uri = URI.parse(candidate) rescue return nil
-        uri.host == @host ? uri.path : nil
+        same_host?(uri.host) ? uri.path : nil
+      elsif link =~ /\A[a-zA-Z][a-zA-Z0-9+.\-]*:/
+        # A non-http(s) scheme (mailto:, tel:, javascript:, data:): not a path to
+        # request. feroxbuster drops these off-origin through Url::join;
+        # concatenating them would put junk, or a huge data: URI, on the wire.
+        nil
       elsif link.starts_with?("/")
         link
       else
         resolve(link, from)
       end
+    end
+
+    # A host matches the scan origin case-insensitively: RFC 3986 host is case-
+    # insensitive, so a link whose host differs only in case is same-origin, not
+    # off-scope.
+    private def same_host?(host : String?) : Bool
+      return false unless host
+      host.compare(@host, case_insensitive: true) == 0
     end
 
     private def resolve(link : String, from : String) : String
@@ -120,9 +144,8 @@ module JekyllHyde::Hyde
     end
 
     # Sub-path expansion: "a/b/c.js" -> ["a/b/c.js", "a/b/", "a/"]. The leaf keeps
-    # no trailing slash; each parent directory gets one. A pathologically deep
-    # path is not expanded into every parent (the walk is quadratic in segments);
-    # past the cap only the full path is kept.
+    # no slash, each parent gets one. A pathologically deep path is not expanded
+    # into every parent (quadratic); past the cap only the full path is kept.
     private def sub_paths(path : String) : Array(String)
       parts = normalize(path).split('/').map(&.gsub(URL_CHARS, "")).reject(&.empty?)
       return [] of String if parts.empty?

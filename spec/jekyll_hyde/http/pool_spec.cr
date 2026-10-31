@@ -48,6 +48,21 @@ describe JekyllHyde::Http::Pool do
     end
   end
 
+  it "honors a live concurrency limit below the worker ceiling" do
+    routes = {} of String => FixtureServer::Route
+    12.times { |i| routes["/p#{i}"] = FixtureServer::Route.new(200, "x", delay: 10.milliseconds) }
+    server = FixtureServer.new(routes)
+    begin
+      pool = JekyllHyde::Http::Pool.new(server.base, concurrency: 8)
+      count = 0
+      pool.run((0...12).map { |i| "/p#{i}" }, limit: -> { 2 }) { count += 1 }
+      count.should eq(12)                 # every request still ran
+      server.max_in_flight.should be <= 2 # but never more than the live limit at once
+    ensure
+      server.stop
+    end
+  end
+
   it "stops feeding new paths once cancel returns true" do
     routes = {} of String => FixtureServer::Route
     4.times { |i| routes["/p#{i}"] = FixtureServer::Route.new(200, "x") }
@@ -97,6 +112,46 @@ describe JekyllHyde::Http::Pool do
       # block forever and this example would time out rather than raise.
       expect_raises(Exception, "request generation failed") do
         pool.run(RaisingRequests.new) { }
+      end
+    ensure
+      server.stop
+    end
+  end
+
+  it "drains in-flight workers and returns when the consumer stops early on cancel (F-19)" do
+    routes = {} of String => FixtureServer::Route
+    8.times { |i| routes["/p#{i}"] = FixtureServer::Route.new(200, "x", delay: 20.milliseconds) }
+    server = FixtureServer.new(routes)
+    begin
+      pool = JekyllHyde::Http::Pool.new(server.base, concurrency: 4)
+      cancelled = false
+      seen = 0
+      # The consumer takes its first result, then (as the TUI does on q) cancels
+      # and raises as if its downstream channel had closed. Reaching the line
+      # after run proves the pool wound its feed and workers down instead of
+      # leaving four fibers and sockets parked for the process lifetime; a leak
+      # would hang here, and a wrong re-raise would escape run.
+      pool.run((0...8).map { |i| "/p#{i}" }, cancel: -> { cancelled }) do |_job|
+        seen += 1
+        cancelled = true
+        raise Channel::ClosedError.new
+      end
+      seen.should eq(1)
+    ensure
+      server.stop
+    end
+  end
+
+  it "re-raises a consumer error that was not a cancel, after draining the workers" do
+    routes = {} of String => FixtureServer::Route
+    6.times { |i| routes["/p#{i}"] = FixtureServer::Route.new(200, "x", delay: 10.milliseconds) }
+    server = FixtureServer.new(routes)
+    begin
+      pool = JekyllHyde::Http::Pool.new(server.base, concurrency: 3)
+      # No cancel proc: a consumer that raises is a real bug, surfaced after the
+      # in-flight workers drain (run returns via the raise, never a hang).
+      expect_raises(Exception, "consumer boom") do
+        pool.run((0...6).map { |i| "/p#{i}" }) { |_job| raise "consumer boom" }
       end
     ensure
       server.stop

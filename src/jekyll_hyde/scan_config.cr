@@ -14,7 +14,7 @@ module JekyllHyde
   class ScanConfig
     # The upper bound on -t: enough for any real scan, low enough that sizing the
     # pool channels and spawning the fibers cannot exhaust memory before a single
-    # request goes out (F-12). Operator-supplied, so a typo clamps, not crashes.
+    # request goes out. Operator-supplied, so a typo clamps rather than crashes.
     MAX_THREADS = 1000
 
     property mode = "HYDE"
@@ -68,9 +68,8 @@ module JekyllHyde
     end
 
     # Add a status matcher from a cockpit field. A blank or malformed value is
-    # dropped rather than raised, so a stray keystroke in the form never aborts a
-    # scan; the command line, by contrast, reports a bad value and refuses to
-    # launch.
+    # dropped, not raised, so a stray keystroke never aborts a scan; the command
+    # line, by contrast, reports a bad value and refuses to launch.
     def match_status(value : String) : Nil
       add_status(@matchers, value)
     end

@@ -21,8 +21,8 @@ module JekyllHyde::Hyde
     # SimHash near-duplicate fallbacks.
     record Learned, wildcards : Array(WildcardFilter), similarities : Array(SimilarityFilter)
 
-    # One probe answer, keeping the raw body the SimilarityFilter needs.
-    private record Probe, response : Core::Response, body : Bytes
+    # One probe answer, keeping the decoded body the SimilarityFilter needs.
+    private record Probe, response : Core::Response, text : String
 
     @path : String
 
@@ -47,17 +47,17 @@ module JekyllHyde::Hyde
       probes = [] of Probe
       Http::Pool.new(@base, @options, paths.size).run(paths) do |job|
         if outcome = job.outcome
-          response = Core::Response.hyde(job.path, outcome.status, outcome.body, outcome.location)
-          probes << Probe.new(response, outcome.body)
+          text = String.new(outcome.body).scrub
+          response = Core::Response.hyde(job.path, outcome.status, outcome.body, outcome.location, text: text)
+          probes << Probe.new(response, text)
         end
       end
       probes
     end
 
-    # Group by status; within each group of two or more, keep the dimensions that
-    # are constant across it and learn a SimHash filter from the group's first
-    # body. The size/word/line sentries reset per status group, which is correct
-    # and only matters on the rare probe set that returns more than one status.
+    # Group by status; within each group of two or more, keep the dimensions
+    # constant across it and learn a SimHash filter from the first body. The
+    # count sentries reset per status group (matters only on a multi-status set).
     private def examine(probes : Array(Probe)) : Learned
       wildcards = [] of WildcardFilter
       similarities = [] of SimilarityFilter
@@ -69,13 +69,9 @@ module JekyllHyde::Hyde
         lines = group.all?(&.response.lines.==(first.lines)) ? first.lines : nil
         next unless size || words || lines
         wildcards << WildcardFilter.new(first.status, size, words, lines)
-        similarities << SimilarityFilter.from(decode(group.first.body))
+        similarities << SimilarityFilter.from(group.first.text)
       end
       Learned.new(wildcards, similarities)
-    end
-
-    private def decode(body : Bytes) : String
-      String.new(body).scrub
     end
 
     private def unique_string(length : Int32) : String

@@ -3,22 +3,19 @@
 # boundaries a hostile response can reach: the terminal (the results view) and
 # the filesystem (an export file).
 module JekyllHyde::Core
-  # Replaces every control and direction-override code point with a visible `·`
-  # so server text (an extracted path, a redirect target) cannot inject a
-  # terminal escape, a C1 control, or a bidi reorder into the TUI or a file.
-  # Newline and tab are replaced too, not kept: results render on single cells,
-  # where either would corrupt the layout. Styling is applied after this.
-  # One O(n) pass over bounded, already-length-capped text.
+  # Replaces every control and direction-override code point with a visible `·`,
+  # so server text cannot inject a terminal escape, a C1 control, or a bidi
+  # reorder into the TUI or a file. Newline and tab are replaced too (results
+  # render on single cells). One O(n) pass over bounded text; style after this.
   def self.sanitize(text : String) : String
     String.build(text.bytesize) do |io|
       text.each_char { |char| io << (printable?(char) ? char : '·') }
     end
   end
 
-  # Sanitize at most *limit* characters, stopping early. A caller that will only
-  # show *limit* cells never pays for a pathologically long line, so a per-frame
-  # render stays O(cells drawn), not O(line) (AGENTS Big O). One forward pass,
-  # bounded by *limit*; sanitizing is 1:1 on characters, so the cap is exact.
+  # Sanitize at most *limit* characters, stopping early, so a per-frame render
+  # over a pathologically long line stays O(cells drawn), not O(line) (AGENTS Big
+  # O). One forward pass; sanitizing is 1:1 on characters, so the cap is exact.
   def self.sanitize(text : String, limit : Int32) : String
     return "" if limit <= 0
     String.build do |io|

@@ -57,6 +57,12 @@ describe JekyllHyde::Jekyll::Input do
     expect_raises(ArgumentError) { JekyllHyde::Jekyll::Input.new([source("", "a")]) }
   end
 
+  it "rejects two wordlists bound to the same keyword (a confusing ffuf collision, refused)" do
+    expect_raises(ArgumentError, "bound to FUZZ") do
+      JekyllHyde::Jekyll::Input.new([source("FUZZ", "a", "b"), source("FUZZ", "x", "y")])
+    end
+  end
+
   it "parses a mode name with the stdlib enum" do
     JekyllHyde::Jekyll::Input::Mode.parse("pitchfork").should eq(JekyllHyde::Jekyll::Input::Mode::Pitchfork)
     JekyllHyde::Jekyll::Input::Mode.parse("clusterbomb").should eq(JekyllHyde::Jekyll::Input::Mode::Clusterbomb)

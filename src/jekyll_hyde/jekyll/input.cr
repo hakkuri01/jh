@@ -5,10 +5,9 @@ module JekyllHyde::Jekyll
   # One `-w list:KEYWORD` pairing: the keyword the template carries and the
   # wordlist that fills it.
   record Source, keyword : String, list : Wordlist::List do
-    # Split a "-w" spec into its wordlist path and keyword: "path:KEYWORD" keeps
-    # the keyword, a bare "path" defaults to FUZZ. The last colon splits, so a
-    # scheme or drive colon earlier in the path is preserved; a leading colon
-    # (idx 0) is not a separator. Hyde takes the path and ignores the keyword.
+    # Split a "-w" spec into path and keyword: "path:KEYWORD", or a bare "path"
+    # defaulting to FUZZ. The last colon splits (a scheme or drive colon is kept;
+    # a leading colon is not a separator). Hyde takes the path, ignores the keyword.
     def self.split(spec : String) : {String, String}
       if (idx = spec.rindex(':')) && idx > 0
         {spec[0...idx], spec[(idx + 1)..]}
@@ -37,15 +36,20 @@ module JekyllHyde::Jekyll
     def initialize(@sources : Array(Source), @mode : Mode = Mode::Clusterbomb)
       raise ArgumentError.new("a Jekyll scan needs at least one wordlist") if @sources.empty?
       raise ArgumentError.new("every wordlist needs a keyword") if @sources.any?(&.keyword.empty?)
+      # Reject two wordlists bound to the same keyword. ffuf allows it, but its
+      # providers then collide on that key (the last one wins), so the run walks
+      # the full product while only one list's values take effect.
+      keywords.tally.each do |keyword, count|
+        raise ArgumentError.new("two wordlists are bound to #{keyword}; give each -w a distinct FILE:KEYWORD") if count > 1
+      end
     end
 
     def keywords : Array(String)
       @sources.map(&.keyword)
     end
 
-    # The number of combinations this mode produces: the product of the list
-    # sizes for clusterbomb, the longest list for pitchfork. Zero when any source
-    # is empty, since a position with no values cannot be fuzzed. Int64, because a
+    # The combinations this mode produces: the product of list sizes (clusterbomb)
+    # or the longest list (pitchfork); zero if any source is empty. Int64, since a
     # clusterbomb product overflows Int32 well before it is unreasonable.
     def total : Int64
       return 0_i64 if @sources.any?(&.list.empty?)

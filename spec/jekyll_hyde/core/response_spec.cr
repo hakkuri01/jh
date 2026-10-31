@@ -28,7 +28,7 @@ describe JekyllHyde::Core::Response do
     end
 
     it "counts a body the Hyde way (decoded text)" do
-      result = JekyllHyde::Core::Response.hyde("https://x/a", 200, body, nil)
+      result = JekyllHyde::Core::Response.hyde("https://x/a", 200, body, nil, text: String.new(body).scrub)
       result.size.should eq(16)
       result.words.should eq(3)
       result.lines.should eq(2)

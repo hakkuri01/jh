@@ -3,13 +3,12 @@ require "../../support/fixture_server"
 require "../../../src/jekyll_hyde/http/client"
 
 describe JekyllHyde::Http::Client do
-  it "fetches a route with its status, body, and content type" do
+  it "fetches a route with its status and body" do
     server = FixtureServer.new({"/ok" => FixtureServer::Route.new(200, "hello world\nfoo\n")})
     begin
       outcome = JekyllHyde::Http::Client.new(server.base).fetch("/ok")
       outcome.status.should eq(200)
       String.new(outcome.body).should eq("hello world\nfoo\n")
-      outcome.content_type.should eq("text/html")
       outcome.truncated.should be_false
       outcome.headers.should contain("Content-Type: text/html")
     ensure

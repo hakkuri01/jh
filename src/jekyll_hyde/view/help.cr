@@ -26,25 +26,38 @@ module JekyllHyde::View
       {"esc", "leave INSERT mode"},
     ]
     FLAGS = [
-      {"-u", "target URL"},
-      {"-w", "wordlist path"},
+      {"-u", "target URL (FUZZ marks the Jekyll point)"},
+      {"-w", "wordlist (repeatable; FILE:KEY in Jekyll)"},
       {"-e", "extensions (php,html,…)"},
-      {"-t", "concurrent threads"},
-      {"--mc", "match status codes"},
-      {"--fc", "filter status codes"},
+      {"-t", "concurrent requests"},
+      {"-X", "request method"},
+      {"-H", "header 'Name: Value' (repeatable)"},
+      {"-b", "cookie value"},
+      {"--data", "request body (implies POST)"},
+      {"-k", "skip TLS verification"},
+      {"-o", "write results to a file"},
+      {"--format", "export format: json or csv"},
+      {"--headless", "run with no TUI"},
     ]
     HYDE = [
-      {"-d", "max recursion depth"},
+      {"-d", "max recursion depth (0 = unlimited)"},
       {"--no-recursion", "scan only the target, no descent"},
       {"--auto-tune", "back off on 429/403 floods"},
+      {"--filter-similar-to", "drop pages like URL (repeatable)"},
       {"native", "recursion · calibration · link scrape"},
     ]
     JEKYLL = [
-      {"FUZZ", "injection keyword, required in -u"},
+      {"FUZZ", "keyword, required somewhere in the request"},
       {"input", "clusterbomb · pitchfork (multi -w)"},
-      {"--ms --mw --ml", "match size · words · lines"},
-      {"--mr --mt", "match regex · time (--f… to filter)"},
-      {"and/or", "combine matchers and filters"},
+      {"--mc / --fc", "match / filter status"},
+      {"--ms / --fs", "match / filter size"},
+      {"--mw / --fw", "match / filter words"},
+      {"--ml / --fl", "match / filter lines"},
+      {"--mr / --fr", "match / filter regex"},
+      {"--mt / --ft", "match / filter time"},
+      {"--mmode / --fmode", "combine: and / or"},
+      {"--mode", "input: clusterbomb / pitchfork"},
+      {"--ac", "autocalibrate wildcard filters"},
     ]
 
     # The reference frame for *mode*: KEYS and FLAGS side by side, then the
@@ -69,7 +82,7 @@ module JekyllHyde::View
     # Draws *section* at *geom* ({top, left, right}); returns the last row drawn.
     private def panel(grid : Render::Grid, geom : Tuple(Int32, Int32, Int32), section : Section) : Int32
       top, left, right = geom
-      header(grid, geom, section.label, section.accent)
+      Text.section_rail(grid, geom, section.label, section.accent)
       keyw = section.rows.max_of { |(key, _)| key.size }
       rail = Render.dim(section.accent, 0.55)
       section.rows.each_with_index do |(key, desc), index|
@@ -82,18 +95,6 @@ module JekyllHyde::View
         grid.text(row, desc_col, Text.clip(desc, right - desc_col + 1), Render::MUTED)
       end
       top + section.rows.size
-    end
-
-    # The heavy section header: ┏━┫ LABEL ┣━━…, matching the cockpit's dividers.
-    private def header(grid : Render::Grid, geom : Tuple(Int32, Int32, Int32), label : String, accent : Render::RGB) : Nil
-      top, left, right = geom
-      line = Render.dim(accent, 0.55)
-      grid.put(top, left, '┏', line)
-      grid.put(top, left + 1, '━', line)
-      grid.put(top, left + 2, '┫', line)
-      grid.text(top, left + 4, label, accent)
-      grid.put(top, left + 5 + label.size, '┣', line)
-      (left + 6 + label.size..right).each { |col| grid.put(top, col, '━', Render.dim(accent, 0.3)) }
     end
   end
 end

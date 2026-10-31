@@ -18,7 +18,7 @@ targets:
 
 # No `dependencies` key, on purpose: the shipped binary uses the standard
 # library only. Ameba is the one development dependency, pinned to a commit
-# (a tag can move, a commit cannot) and built by the Makefile, so no install
+# (a tag can move, a commit cannot) and built by the justfile, so no install
 # script runs.
 development_dependencies:
   ameba:

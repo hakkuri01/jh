@@ -8,7 +8,8 @@ module JekyllHyde::Tui
   # command sleeps a frame, then reports the clock.
   alias Cmd = Proc(Msg)
 
-  # A command that ends the program, returned by the model on a quit key.
+  # A command that ends the program, returned by the model on a quit key. The
+  # cast widens the concrete QuitMsg to the Msg union the Cmd must return.
   QUIT = Cmd.new { QuitMsg.new.as(Msg) }
 
   # A command that waits *span*, then reports a `TickMsg`; a model animates by
@@ -16,6 +17,7 @@ module JekyllHyde::Tui
   def self.tick(span : Time::Span) : Cmd
     Cmd.new do
       sleep span
+      # Widen the concrete TickMsg to the Msg union the Cmd block must return.
       TickMsg.new(Time.instant).as(Msg)
     end
   end

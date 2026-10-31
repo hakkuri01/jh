@@ -18,6 +18,35 @@ module JekyllHyde::Http
     # How often a paused feed wakes to recheck the pause and cancel flags.
     PAUSE_POLL = 40.milliseconds
 
+    # Caps the requests running at once, read live from *limit*, so Hyde's
+    # auto-tuner can lower concurrency mid-batch (and raise it back) without the
+    # pool being torn down. A worker acquires before each fetch and releases
+    # after; with no *limit* (Jekyll, no auto-tune) it never waits.
+    # ponytail: a 2ms poll, not a condition variable. It engages only while
+    # throttled below the worker ceiling, where going gently is the point, and n
+    # is bounded by C (ScanConfig::MAX_THREADS, 1000). At the ceiling a releasing
+    # worker always leaves a slot free before it re-acquires, so it never polls.
+    private class Limiter
+      POLL = 2.milliseconds
+
+      def initialize(@limit : Proc(Int32)?)
+        @in_flight = 0
+      end
+
+      def acquire : Nil
+        limit = @limit
+        return unless limit
+        while @in_flight >= limit.call
+          sleep(POLL)
+        end
+        @in_flight += 1
+      end
+
+      def release : Nil
+        @in_flight -= 1 if @limit
+      end
+    end
+
     def initialize(@base : String, @options : Options = Options.new, concurrency : Int32 = 40)
       @concurrency = Math.max(concurrency, 1)
       @base_headers = Request.headers_from(@options.headers)
@@ -37,35 +66,31 @@ module JekyllHyde::Http
     end
 
     # Run every path in *paths* with the options' static method, headers, and body.
-    def run(paths : Enumerable(String), cancel : Proc(Bool)? = nil, pause : Proc(Bool)? = nil, &) : Nil
-      run(PathRequests.new(paths, @options.method, @base_headers, @options.body), cancel, pause) { |job| yield job }
+    def run(paths : Enumerable(String), cancel : Proc(Bool)? = nil, pause : Proc(Bool)? = nil, limit : Proc(Int32)? = nil, &) : Nil
+      run(PathRequests.new(paths, @options.method, @base_headers, @options.body), cancel, pause, limit) { |job| yield job }
     end
 
-    # Run every request in *requests*, yielding each Job as it completes
-    # (completion order, not input order; each Job carries its own path). Stops
-    # feeding new requests once *cancel* returns true, so a cancelled scan drains
-    # the at-most-C in-flight requests and returns rather than running the list to
-    # the end. While *pause* returns true the feed holds (no new requests go out,
-    # in-flight ones drain), resuming when it clears; cancel still breaks a paused
-    # feed.
-    def run(requests : Enumerable(Request), cancel : Proc(Bool)? = nil, pause : Proc(Bool)? = nil, &) : Nil
+    # Run every request, yielding each Job as it completes (completion order, each
+    # Job carrying its path). *cancel* stops the feed and drains the at-most-C
+    # in-flight requests; *pause* holds the feed (in-flight ones drain) and resumes
+    # when it clears, with cancel still breaking a paused feed.
+    def run(requests : Enumerable(Request), cancel : Proc(Bool)? = nil, pause : Proc(Bool)? = nil, limit : Proc(Int32)? = nil, &) : Nil
       jobs = Channel(Request).new(@concurrency)
       results = Channel(Job).new(@concurrency)
       done = Channel(Nil).new
-      # A request the producer fails to build (e.g. a FUZZ value that makes an
-      # invalid header) is captured and re-raised after the pool drains, so the
-      # scan ends with one actionable error instead of hanging on a feed fiber
-      # that died before it could close the jobs channel.
+      limiter = Limiter.new(limit)
       producer_error = nil
+      # Set when the consumer (the yielded block) stops early, so the feed winds
+      # down even if the caller's own cancel never turns true.
+      stopped = false
+      feed_cancel = -> { stopped || (cancel.try(&.call) || false) }
 
-      @concurrency.times do
-        spawn do
-          work(jobs, results)
-          done.send(nil)
-        end
-      end
+      spawn_workers(jobs, results, done, limiter)
+      # A request the producer fails to build (e.g. an invalid FUZZ header) is
+      # captured and re-raised after the pool drains, so the scan ends with one
+      # actionable error, not a hang on a feed fiber that died before closing jobs.
       spawn do
-        feed(requests, jobs, cancel, pause)
+        feed(requests, jobs, feed_cancel, pause)
       rescue ex
         producer_error = ex
       ensure
@@ -73,11 +98,37 @@ module JekyllHyde::Http
       end
       spawn close_when_drained(done, results)
 
-      while job = results.receive?
-        yield job
+      begin
+        while job = results.receive?
+          yield job
+        end
+      rescue ex
+        # The consumer stopped early (cancel closed the TUI's result channel).
+        # Drain so the parked workers free their sockets; swallow a cancel
+        # teardown, re-raise any other consumer failure (F-19).
+        stopped = true
+        drain_results(results)
+        raise ex unless cancel.try(&.call)
       end
       if error = producer_error
         raise error
+      end
+    end
+
+    private def spawn_workers(jobs : Channel(Request), results : Channel(Job), done : Channel(Nil), limiter : Limiter) : Nil
+      @concurrency.times do
+        spawn do
+          work(jobs, results, limiter)
+          done.send(nil)
+        end
+      end
+    end
+
+    # After the consumer stops early its in-flight workers are parked sending to a
+    # results channel nobody reads; draining lets each finish its request, free its
+    # socket, and exit instead of parking for the process lifetime (F-19).
+    private def drain_results(results : Channel(Job)) : Nil
+      while results.receive?
       end
     end
 
@@ -96,14 +147,20 @@ module JekyllHyde::Http
       results.close
     end
 
-    # A pool worker: its own keep-alive client, reused across the jobs it pulls.
-    # Nothing escapes the fiber. A client that cannot be built for the origin (a
-    # malformed base URL, say) and any per-request failure both become errored
-    # jobs, never an unhandled spawn exception that would corrupt the TUI.
-    private def work(jobs : Channel(Request), results : Channel(Job)) : Nil
+    # A pool worker: its own keep-alive client, reused across jobs. A client that
+    # cannot be built and any per-request failure become errored jobs, never an
+    # unhandled spawn exception that would corrupt the TUI. The limiter gates each
+    # fetch to the live concurrency; the permit covers the fetch, not the send.
+    private def work(jobs : Channel(Request), results : Channel(Job), limiter : Limiter) : Nil
       client = build_client
       while request = jobs.receive?
-        results.send(fetch_job(client, request))
+        limiter.acquire
+        job = begin
+          fetch_job(client, request)
+        ensure
+          limiter.release
+        end
+        results.send(job)
       end
     end
 

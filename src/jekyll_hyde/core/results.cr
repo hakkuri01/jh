@@ -64,16 +64,19 @@ module JekyllHyde::Core
       format == "csv" ? to_csv : to_json
     end
 
-    # Write the results to *path* in *format*, atomically: a sibling temp file
-    # renamed over the target, so a failed or interrupted write never replaces a
-    # good export with a partial one. Raises File::Error on a write failure.
+    # Write the results atomically and safely: the data goes to a randomly named,
+    # 0600, exclusively created temp file in the target's directory, then renamed
+    # over it. The random name (not a predictable PID one) stops a local attacker
+    # pre-planting a symlink at the temp path. Raises File::Error on failure.
     def write(path : String, format : String) : Nil
-      tmp = "#{path}.#{Process.pid}.part"
+      tmp = File.tempfile("jh", ".part", dir: File.dirname(path))
       begin
-        File.write(tmp, serialize(format))
-        File.rename(tmp, path)
+        tmp.print(serialize(format))
+        tmp.close
+        File.rename(tmp.path, path)
       rescue ex
-        File.delete?(tmp)
+        tmp.close rescue nil
+        File.delete?(tmp.path)
         raise ex
       end
     end

@@ -1,14 +1,9 @@
 require "../spec_helper"
 require "../support/fixture_server"
+require "../support/wordlists"
 require "../../src/jekyll_hyde/headless"
 require "../../src/jekyll_hyde/entry"
-
-private def wordlist_file(*words : String) : String
-  file = File.tempfile("jh_wl")
-  words.each { |word| file.puts(word) }
-  file.close
-  file.path
-end
+require "base64"
 
 private def hyde_config(url : String, path : String) : JekyllHyde::ScanConfig
   config = JekyllHyde::ScanConfig.new
@@ -137,6 +132,23 @@ describe JekyllHyde::Headless do
       JekyllHyde::Headless.run(config, sink, log).should eq(0)
       sink.to_s.should contain("/real")
       sink.to_s.should_not contain("/dup") # filtered via the config -> ScanBuilder -> Hyde pass-through
+    ensure
+      server.stop
+      File.delete(path)
+    end
+  end
+
+  it "sends URL userinfo as HTTP Basic auth (ffuf/feroxbuster parity) and never into results" do
+    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
+    path = wordlist_file("admin")
+    begin
+      config = hyde_config(server.base.sub("http://", "http://user:pass@"), path)
+      sink = IO::Memory.new
+      log = IO::Memory.new
+      JekyllHyde::Headless.run(config, sink, log).should eq(0)
+      token = "Basic #{Base64.strict_encode("user:pass")}"
+      server.received_headers.any? { |h| h["Authorization"]? == token }.should be_true # credentials sent
+      sink.to_s.should_not contain("user:pass")                                        # but not exported
     ensure
       server.stop
       File.delete(path)

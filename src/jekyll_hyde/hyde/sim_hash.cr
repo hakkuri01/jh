@@ -13,7 +13,7 @@ module JekyllHyde::Hyde
     # kept, so they stay in words.
     PUNCT = Set{'!', '\\', '"', '#', '$', '%', '&', '(', ')', '*', '+', ':', ';',
                 '<', '=', '>', '?', '@', '[', ']', '^', '{', '}', '|', '~', ',',
-                '\'', '“', '”', '’', '‘', '/', '–', '—', '.'}
+                '\'', '“', '”', '’', '‘', '/', '–', '\u{2014}', '.'}
 
     # Word boundary regex, used to find words for stop-word removal.
     WORD = /\b[a-zA-Z0-9_-]+\b/

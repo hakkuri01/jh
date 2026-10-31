@@ -138,12 +138,11 @@ private def calibration_scenarios : Array(Parity::Scenario)
 end
 
 describe "Jekyll parity vs the fixture" do
-  it "reproduces the expected findings to >= 95% across the scenarios" do
+  it "reproduces the expected findings exactly across the scenarios" do
     scenarios = status_scenarios + metric_filter_scenarios + content_filter_scenarios +
                 input_scenarios + calibration_scenarios
     score = Parity.score(scenarios)
     puts "\nJekyll parity vs fixture: #{(score * 100).round(1)}% over #{scenarios.size} scenarios\n#{Parity.report(scenarios)}"
-    score.should be >= 0.95
-    scenarios.each(&.extra.should(be_empty)) # no false positives anywhere
+    scenarios.all?(&.clean?).should be_true # exact: no missing and no extra finding in any scenario
   end
 end

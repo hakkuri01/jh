@@ -26,18 +26,19 @@ module JekyllHyde::Hyde
   # The crawl is budgeted so a hostile target cannot drive it unbounded. One run
   # per instance.
   class Scan
-    # Crawl budget (AGENTS Big O 6): a hostile target that emits a fresh unique
-    # link per response must not drive unbounded requests, memory, or results.
-    # Links past the per-response cap are dropped, and once the frontier reaches
-    # the global cap no new path is queued and the walk winds down with one
-    # warning. The per-link path depth is deliberately not capped beyond the
-    # recursion bound: feroxbuster requests extracted files at any depth, and the
-    # frontier cap already bounds the queue.
-    MAX_LINKS_PER_RESPONSE =     500
-    MAX_FRONTIER           = 100_000
+    # Discovered-link budget (AGENTS Big O 6): a hostile target that emits fresh
+    # unique links per response must not drive unbounded requests. Links mined
+    # from bodies and robots.txt count against MAX_FRONTIER; once it is reached no
+    # new discovered path is queued and the walk winds down with one warning. The
+    # operator's own wordlist is NOT counted: every entry is requested under every
+    # in-scope directory (feroxbuster puts no total cap on the wordlist), so a
+    # large list is scanned in full, never truncated. The per-response link cap
+    # and the per-link byte cap live in the Extractor.
+    MAX_FRONTIER = 100_000
 
     @results = Core::Results.new
     @requested = Set(String).new
+    @discovered = 0
     @queue = Deque(String).new
     @seen = Set(String).new
     @filters = Hash(Int32, Array(WildcardFilter)).new
@@ -46,6 +47,7 @@ module JekyllHyde::Hyde
     @cancel : Proc(Bool)? = nil
     @pause : Proc(Bool)? = nil
     @origin : String
+    @origin_normalized : String
     @base : String
     @base_depth : Int32
     # Live progress, read by the TUI from another fiber. Safe under the
@@ -63,8 +65,10 @@ module JekyllHyde::Hyde
       # must be requested explicitly, and the base is where that request line
       # starts.
       @origin = origin_of(uri)
+      @origin_normalized = origin_of(uri.normalize)
       @base = base_path(uri.path)
       @base_depth = depth(@base)
+      @concurrency = concurrency
       @extractor = Extractor.new(@origin)
       @tuner = Tuner.new(concurrency, enabled: auto_tune)
     end
@@ -87,12 +91,9 @@ module JekyllHyde::Hyde
       perform
     end
 
-    # Stream each kept result to *on_result* as it is found, stopping early when
-    # *cancel* returns true and holding while *pause* returns true. Cancellation
-    # is checked before each directory and request batch, so a stop takes effect
-    # within one pool of in-flight requests: the TUI streams results into the Elm
-    # loop, q stops the scan, and p holds it without leaving requests hammering
-    # the target.
+    # Stream each kept result to *on_result* as found, stopping when *cancel* turns
+    # true and holding while *pause* does. Both are checked before each directory
+    # and batch, so a stop or hold takes effect within one pool of in-flight requests.
     def run(cancel : Proc(Bool)? = nil, pause : Proc(Bool)? = nil, &on_result : Core::Response ->) : Core::Results
       @on_result = on_result
       @cancel = cancel
@@ -117,7 +118,7 @@ module JekyllHyde::Hyde
       learn_filters(dir)
       worklist = Deque(String).new
       offer(dir, worklist) # the directory's own URL, reported as a finding
-      @wordlist.entries.each { |word| offer(dir + word, worklist) }
+      @wordlist.entries.each { |word| offer(dir + Http.request_token(word), worklist) }
       seed_robots(worklist) if dir == @base
       drain(worklist)
     end
@@ -138,16 +139,14 @@ module JekyllHyde::Hyde
       request = Http::Request.new("GET", "/robots.txt", Http::Request.headers_from(@options.headers))
       outcome = Http::Client.new(@origin, @options).fetch(request)
       return if outcome.status >= 400
-      @extractor.extract_robots(decode(outcome.body)).each { |link| offer(link, worklist) }
+      @extractor.extract_robots(decode(outcome.body)).each { |link| offer_discovered(link, worklist) }
     rescue Http::Error
       # no reachable robots.txt, nothing to seed
     end
 
     # Seed the near-duplicate filters from operator reference pages
-    # (--filter-similar-to): fetch each, hash its body, and seed the same
-    # `@sim_filters` the soft-404 fallback uses. Best effort: a reference that is
-    # not a valid URL, cannot be fetched, or is empty is skipped with a warning,
-    # never fatal.
+    # (--filter-similar-to): fetch each, hash its body, seed the same `@sim_filters`
+    # the soft-404 fallback uses. Best effort: an unusable reference is skipped.
     private def seed_similarity_filters : Nil
       @similar_to.each do |url|
         unless Http.valid_url?(url)
@@ -184,7 +183,10 @@ module JekyllHyde::Hyde
       until worklist.empty? || cancelled?
         batch = worklist.to_a
         worklist.clear
-        Http::Pool.new(@origin, @options, @tuner.concurrency).run(batch, @cancel, @pause) { |job| handle(job, worklist) }
+        # The pool runs at the configured ceiling and reads the tuned concurrency
+        # live, so --auto-tune backs a flood off within this batch (feroxbuster
+        # adjusts its live limiter), not only at the next batch boundary.
+        Http::Pool.new(@origin, @options, @concurrency).run(batch, @cancel, @pause, limit: -> { @tuner.concurrency }) { |job| handle(job, worklist) }
       end
     end
 
@@ -194,51 +196,66 @@ module JekyllHyde::Hyde
       @errors += 1 unless outcome
       @tuner.observe(outcome ? outcome.status : 0, error: outcome.nil?)
       return unless outcome
-      response = Core::Response.hyde(@origin + job.path, outcome.status, outcome.body, outcome.location)
+      text = decode(outcome.body)
+      response = Core::Response.hyde(@origin + job.path, outcome.status, outcome.body, outcome.location, text: text)
+      # Recurse before filtering: a directory whose body matches the learned
+      # soft-404 is still a directory worth descending, so the recursion decision
+      # comes before the keep/drop filter (feroxbuster recurses before filtering,
+      # "even though this particular url is filtered, subsequent urls may not").
+      recurse(job.path, outcome)
       return if wildcard_filtered?(response)
-      return if sim_filtered?(outcome.body)
+      return if sim_filtered?(text)
       @results << response
       @on_result.try &.call(response)
-      mine_links(outcome.body, job.path, worklist)
-      recurse(job.path, outcome)
+      mine_links(text, job.path, worklist)
     end
 
-    # Drop a response that matches a learned wildcard fingerprint for its own
-    # status: an O(1) status lookup, then at most the few filters that share that
-    # status, not every filter learned across the walk (AGENTS Big O,
-    # per-response filter).
+    # Drop a response that matches a learned wildcard fingerprint for its status:
+    # an O(1) status lookup, then the filters sharing that status, not every one
+    # learned across the walk (AGENTS Big O, per-response filter).
     private def wildcard_filtered?(response : Core::Response) : Bool
       bucket = @filters[response.status]?
       return false unless bucket
       bucket.any?(&.matches?(response))
     end
 
-    # Mine the kept body for links, capped per response so one hostile page
-    # cannot enqueue an unbounded batch (AGENTS Big O 6, text-from-outside).
-    private def mine_links(body : Bytes, from : String, worklist : Deque(String)) : Nil
-      @extractor.extract(decode(body), from).each_with_index do |link, index|
-        break if index >= MAX_LINKS_PER_RESPONSE
-        offer(link, worklist)
-      end
+    # Mine the kept body for links; the Extractor caps how many it returns, and
+    # each is offered against the discovered-link budget (AGENTS Big O 6).
+    private def mine_links(text : String, from : String, worklist : Deque(String)) : Nil
+      @extractor.extract(text, from).each { |link| offer_discovered(link, worklist) }
     end
 
     # SimHash fallback: drop a response that is a near-duplicate of a learned
-    # soft-404. One O(body) pass, taken only once a filter exists (AGENTS Big O,
-    # text-from-outside).
-    private def sim_filtered?(body : Bytes) : Bool
+    # soft-404. One pass over the already-decoded text, taken only once a filter
+    # exists (AGENTS Big O, text-from-outside).
+    private def sim_filtered?(text : String) : Bool
       return false if @sim_filters.empty?
-      signature = SimHash.signature(decode(body))
+      signature = SimHash.signature(text)
       @sim_filters.any?(&.matches?(signature))
     end
 
-    # Queue *path* unless already requested or the frontier is full. The global
-    # cap is the hard stop on a hostile fresh-link chain (AGENTS Big O 6).
+    # Queue an operator or structural path (the directory itself, a wordlist
+    # entry): deduplicated, never counted against the discovered-link budget, so a
+    # large wordlist is scanned in full rather than truncated.
+    # ponytail: @requested therefore grows with W x in-scope directories, bounded
+    # by the operator's own list and the depth-bounded seen-URL set, not by the
+    # network. A list too large to dedup in memory would need a streamed set.
     private def offer(path : String, worklist : Deque(String)) : Nil
-      if @requested.size >= @max_frontier
-        @warning ||= "crawl limit reached (#{@max_frontier} paths); discovery stopped"
+      worklist.push(path) if @requested.add?(path)
+    end
+
+    # Queue a page-authored path (a mined link, a robots.txt entry): deduplicated
+    # and counted against the discovered-link budget, the hard stop on a hostile
+    # fresh-link chain (AGENTS Big O 6). A repeat consumes no budget.
+    private def offer_discovered(path : String, worklist : Deque(String)) : Nil
+      return if @requested.includes?(path)
+      if @discovered >= @max_frontier
+        @warning ||= "crawl limit reached (#{@max_frontier} discovered paths); link discovery stopped"
         return
       end
-      worklist.push(path) if @requested.add?(path)
+      @requested.add(path)
+      @discovered += 1
+      worklist.push(path)
     end
 
     private def recurse(path : String, outcome : Http::Outcome) : Nil
@@ -259,13 +276,22 @@ module JekyllHyde::Hyde
       if 300 <= status < 400
         location = outcome.location
         return false unless location
-        resolved = location.starts_with?(@origin) ? location[@origin.size..] : location
-        resolved == "#{path}/"
+        directory_redirect?(path, location)
       elsif (200 <= status < 300) || status == 403
         path.ends_with?("/")
       else
         false
       end
+    end
+
+    # A 3xx is a directory when its Location resolves (against the requested URL)
+    # to that same URL plus a trailing slash, same origin. URI resolve+normalize
+    # handles relative, root-relative, and absolute forms (feroxbuster's url.join).
+    private def directory_redirect?(path : String, location : String) : Bool
+      target = URI.parse(@origin + path).resolve(location).normalize
+      origin_of(target) == @origin_normalized && target.path == "#{path}/"
+    rescue
+      false
     end
 
     # Count of non-empty path segments: "/" -> 0, "/a/" -> 1, "/a/b/" -> 2.

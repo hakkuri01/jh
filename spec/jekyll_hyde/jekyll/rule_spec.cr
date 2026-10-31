@@ -34,6 +34,15 @@ describe JekyllHyde::Jekyll::Rule do
     JekyllHyde::Jekyll::Rule.build("regex", "Tomcat").matches?(candidate(headers: headers)).should be_false
   end
 
+  it "does not raise on a response header carrying a non-UTF-8 byte (scrubs first)" do
+    # A hostile server can put a raw 0x80..0xFF byte in a header value; PCRE2
+    # raises on an invalid-UTF-8 subject, which would abort a --mr/--fr scan. The
+    # rule scrubs the headers and body together, so one bad byte is harmless.
+    bad = String.new(Bytes[0x58, 0x3A, 0x20, 0xFF, 0x0D, 0x0A]) # "X: \xFF\r\n", invalid UTF-8
+    JekyllHyde::Jekyll::Rule.build("regex", "X:").matches?(candidate(headers: bad)).should be_true
+    JekyllHyde::Jekyll::Rule.build("regex", "absent").matches?(candidate(headers: bad)).should be_false
+  end
+
   it "matches a request duration above or below a threshold in ms" do
     slow = candidate(elapsed: 200.milliseconds)
     JekyllHyde::Jekyll::Rule.build("time", ">100").matches?(slow).should be_true

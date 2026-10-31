@@ -69,18 +69,16 @@ module JekyllHyde::View
       boot(canvas, mode, HOLD_END)
     end
 
-    # A static burst over any built frame: a fraction of the non-blank cells
-    # flicker to glitch glyphs, rising to a peak at the midpoint and falling off,
-    # keeping each cell's colors. This is the mode-switch animation; it must play
-    # on every switch (a locked invariant), so it is a frame transform any phase
-    # can apply, not tied to the opener.
+    # A static burst over a built frame: a fraction of non-blank cells flicker to
+    # glitch glyphs, peaking at the midpoint. The mode-switch animation, a frame
+    # transform any phase applies; it must play on every switch (a locked invariant).
     def flicker(grid : Render::Grid, progress : Float64, rng : Random) : Render::Grid
       intensity = (0.5 - (progress - 0.5).abs) * 2 * 0.5
       grid.cells.each_with_index do |line, row|
         line.each_with_index do |cell, col|
           glyph, color, background = cell
           next if glyph == ' ' && color.nil? && background.nil?
-          grid.put(row, col, Render::GLITCH.sample(rng), color, background) if rng.rand < intensity
+          grid.put(row, col, Render::GLITCH.sample(rng), color, background: background) if rng.rand < intensity
         end
       end
       grid

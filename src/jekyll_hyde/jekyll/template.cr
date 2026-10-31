@@ -1,4 +1,5 @@
 require "uri"
+require "../http/client"
 
 module JekyllHyde::Jekyll
   # A FUZZ template: a URL carrying one or more keywords in its path or query.
@@ -21,12 +22,11 @@ module JekyllHyde::Jekyll
     def initialize(raw : String, @keywords : Array(String) = [KEYWORD])
       raise ArgumentError.new("a template needs at least one keyword") if @keywords.empty?
       raise ArgumentError.new("every keyword must be non-empty") if @keywords.any?(&.empty?)
+      raise ArgumentError.new("not a valid URL; use http://host/FUZZ") unless Http.valid_url?(raw)
       uri = URI.parse(raw)
-      scheme, host = uri.scheme, uri.host
-      unless scheme == "http" || scheme == "https"
-        raise ArgumentError.new("not a valid URL; use http://host/FUZZ")
-      end
-      raise ArgumentError.new("not a valid URL; use http://host/FUZZ") if host.nil? || host.empty?
+      # valid_url? already ensured an http(s) scheme and a non-empty host; these
+      # fallbacks only satisfy the nilable types and are never actually taken.
+      scheme, host = uri.scheme || "http", uri.host || ""
       @keywords.each do |keyword|
         raise ArgumentError.new("#{keyword} cannot be in the host") if host.includes?(keyword)
       end

@@ -68,9 +68,10 @@ before it is written.
    from arbitrary targets. All external text (response bodies, headers, status
    reasons, extracted links, redirect targets, filenames) passes a `sanitize`
    pass before it touches the terminal or the filesystem: strip escape
-   sequences, C0 and C1 controls except newline and tab, and bidirectional
-   overrides. A malicious or compromised target must not be able to inject
-   terminal escapes into the TUI. Styles are applied after sanitizing.
+   sequences, the C0 controls (newline and tab included, since a result renders
+   on a single cell), DEL, the C1 controls, and bidirectional overrides. A
+   malicious or compromised target must not be able to inject terminal escapes
+   into the TUI. Styles are applied after sanitizing.
 2. **Provenance decides handling, and the payload is the point.** A fuzzer that
    encodes its operator's payload is broken. The axis is where a byte came from,
    not its value:

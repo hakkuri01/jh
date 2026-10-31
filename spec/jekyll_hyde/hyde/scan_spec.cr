@@ -111,4 +111,62 @@ describe JekyllHyde::Hyde::Scan do
       server.stop
     end
   end
+
+  it "recurses on a relative directory redirect (Location: admin/, not /admin/)" do
+    server = FixtureServer.new({
+      "/admin"        => FixtureServer::Route.new(301, "", location: "admin/"),
+      "/admin/secret" => FixtureServer::Route.new(200, "the hidden admin dashboard listing accounts"),
+    })
+    begin
+      results = JekyllHyde::Hyde::Scan.new(server.base, wordlist("admin", "secret"), concurrency: 4).run
+      hits = found(results, server.base)
+      hits.should contain({"/admin", 301})
+      hits.should contain({"/admin/secret", 200}) # only reachable if the relative redirect was read as a directory
+    ensure
+      server.stop
+    end
+  end
+
+  it "recurses into a directory whose own response is filtered (recurse before filter)" do
+    noise = "Sorry, that page could not be found on this server; please check the address and try again later, or browse the catalogue."
+    server = FixtureServer.new({
+      "/app"       => FixtureServer::Route.new(301, noise, location: "/app/"), # a directory that looks like the soft 404
+      "/app/admin" => FixtureServer::Route.new(200, "the internal administrative dashboard with billing and audit logs"),
+    })
+    begin
+      scan = JekyllHyde::Hyde::Scan.new(server.base, wordlist("app", "admin"), concurrency: 4, similar_to: ["#{server.base}/app"])
+      hits = found(scan.run, server.base).map(&.first)
+      hits.should_not contain("/app")   # filtered as a near-duplicate of the reference
+      hits.should contain("/app/admin") # but the directory was descended before the filter dropped it
+    ensure
+      server.stop
+    end
+  end
+
+  it "scans the whole wordlist even past the discovered-link budget (the cap counts only discovered links)" do
+    links = String.build { |io| 10.times { |n| io << %(<a href="/l#{n}">x</a>) } }
+    server = FixtureServer.new({"/" => FixtureServer::Route.new(200, links)})
+    begin
+      words = (0...10).map { |n| "w#{n}" }
+      scan = JekyllHyde::Hyde::Scan.new(server.base, JekyllHyde::Wordlist::List.new(words), concurrency: 4, max_depth: 1, max_frontier: 3)
+      scan.run
+      words.each { |word| server.received.should contain("/#{word}") } # every wordlist entry still requested
+      server.received.count(&.starts_with?("/l")).should be <= 3       # discovered links stopped at the budget
+      scan.warning.should_not be_nil                                   # and the cap was surfaced
+    ensure
+      server.stop
+    end
+  end
+
+  it "percent-encodes a space in a wordlist word so the request line stays valid" do
+    server = FixtureServer.new({"/new%20folder" => FixtureServer::Route.new(200, "found content here")})
+    begin
+      results = JekyllHyde::Hyde::Scan.new(server.base, wordlist("new folder"), concurrency: 2, max_depth: 1).run
+      server.received.should contain("/new%20folder") # the space went out encoded, not raw
+      server.received.should_not contain("/new folder")
+      found(results, server.base).map(&.first).should contain("/new%20folder")
+    ensure
+      server.stop
+    end
+  end
 end

@@ -22,15 +22,16 @@ module JekyllHyde
     end
 
     def initialize(@config : ScanConfig, @sink : IO, @log : IO)
+      @interrupted = false
     end
 
     def run : Int32
-      validate_target!
       scan = ScanBuilder.build(@config)
-      results = scan.run { |response| progress(response) }
+      results = with_interrupt_trap { scan.run(cancel: -> { @interrupted }) { |response| progress(response) } }
       report_warning(scan)
       code = emit(results)
       return code unless code == 0
+      return 130 if @interrupted # partial results already written; 128 + SIGINT
       return report_error("every request failed; the target may be unreachable") if all_errored?(scan)
       0
     rescue ex : File::Error
@@ -39,6 +40,16 @@ module JekyllHyde
       report_error(Core.sanitize(ex.message || "invalid command"))
     rescue ex
       report_error(Core.sanitize(ex.message || "scan failed"))
+    end
+
+    # Run the scan with SIGINT/HUP/TERM flipping the cancel flag, so a killed run
+    # stops the scan and still writes what it found (as ffuf and feroxbuster do).
+    # Default handling is restored after, leaving no global signal state behind.
+    private def with_interrupt_trap(&) : Core::Results
+      Process.on_terminate { @interrupted = true }
+      yield
+    ensure
+      Process.restore_interrupts!
     end
 
     # Every request errored on a reachable-looking run: a pipeline should see the
@@ -79,12 +90,6 @@ module JekyllHyde
         @sink.puts results.serialize(@config.format)
       end
       0
-    end
-
-    # Validate the target up front so a malformed URL is one clean line, not a
-    # per-worker exception. Shares the gate with the TUI and the reference fetch.
-    private def validate_target! : Nil
-      raise ArgumentError.new("not a valid URL; use http://host or https://host") unless Http.valid_url?(@config.url)
     end
   end
 end

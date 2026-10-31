@@ -1,13 +1,7 @@
 require "../../spec_helper"
 require "../../support/fixture_server"
+require "../../support/wordlists"
 require "../../../src/jekyll_hyde/view/session"
-
-private def wordlist_file(*words : String) : String
-  file = File.tempfile("jh_wl")
-  words.each { |word| file.puts(word) }
-  file.close
-  file.path
-end
 
 # A Hyde config for *url* over the single wordlist *path*.
 private def hyde_config(url : String, path : String, *, concurrency = 4, depth = 4, extensions = [] of String) : JekyllHyde::ScanConfig
@@ -242,8 +236,8 @@ describe JekyllHyde::View::ScanSession do
       warning = session.warning
       warning.should_not be_nil
       warning.not_nil!.should contain("out.json")
-      warning.not_nil!.should_not contain("/no/such/dir") # no internal path on screen
-      File.exists?("/no/such/dir/out.json.#{Process.pid}.part").should be_false
+      warning.not_nil!.should_not contain("/no/such/dir")   # no internal path on screen
+      File.exists?("/no/such/dir/out.json").should be_false # no partial left behind
     ensure
       server.stop
       File.delete(path)
@@ -258,6 +252,22 @@ describe JekyllHyde::View::ScanSession do
       # Every response is delayed well past the 1ms frame, so the first pull
       # times out to a tick rather than a hit.
       session.listen(1.millisecond).call.should be_a(JekyllHyde::View::ScanTickMsg)
+    ensure
+      server.stop
+      File.delete(path)
+    end
+  end
+
+  it "cancel closes the result channel so listen resolves instead of raising into the Elm loop (F-19)" do
+    server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
+    path = wordlist_file("admin")
+    begin
+      session = JekyllHyde::View::ScanSession.new(hyde_config(server.base, path, concurrency: 2, depth: 1))
+      session.cancel
+      # Closing the channel on cancel must not make the Elm loop's listen command
+      # raise Channel::ClosedError; it resolves to an ordinary message (a tick, or
+      # a hit still buffered), which the app discards for the superseded session.
+      session.listen(1.millisecond).call.should be_a(JekyllHyde::Tui::Msg)
     ensure
       server.stop
       File.delete(path)

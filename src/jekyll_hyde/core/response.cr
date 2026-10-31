@@ -18,10 +18,10 @@ module JekyllHyde::Core
       new(url, status, body.size.to_i64, Metrics.jekyll_words(body), Metrics.jekyll_lines(body), location)
     end
 
-    # Hyde: size from the raw body, counts from the decoded text (scrubbed to
-    # valid UTF-8).
-    def self.hyde(url : String, status : Int32, body : Bytes, location : String?) : Response
-      text = String.new(body).scrub
+    # Hyde: size from the raw body, counts from the decoded *text* (scrubbed to
+    # valid UTF-8). The caller decodes once and reuses that text for the counts,
+    # the similarity filter, and link mining, so a kept body is scrubbed once.
+    def self.hyde(url : String, status : Int32, body : Bytes, location : String?, *, text : String) : Response
       new(url, status, body.size.to_i64, Metrics.hyde_words(text), Metrics.hyde_lines(text), location)
     end
   end

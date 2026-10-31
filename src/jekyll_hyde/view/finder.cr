@@ -134,9 +134,8 @@ module JekyllHyde::View
       accent : Render::RGB
 
     # How many match rows fit at a terminal *height*: the frame less the top
-    # cluster, the filter well, and the divider above, and the footer and frame
-    # margin below. The App clamps its scroll to this and the panel draws exactly
-    # this many, so the two never drift.
+    # cluster, filter well, and divider above, and the footer and margin below. The
+    # App clamps its scroll to this and the panel draws exactly this many.
     def capacity(height : Int32) : Int32
       Math.max(0, height - (PANEL_TOP + 5))
     end
@@ -151,10 +150,9 @@ module JekyllHyde::View
       grid
     end
 
-    # The source file and the live match tally, hung off the top-left rail as
-    # `┠─◈` branch nodes; the source turns red and reads as the error if the list
-    # could not be read. The label is sanitized on both branches, since the
-    # error carries the (operator-chosen) basename.
+    # The source file and the live match tally, as `┠─◈` branch nodes off the
+    # top-left rail; the source reads red as the error when the list cannot be
+    # read. The label is sanitized on both branches (the error carries a basename).
     private def top_cluster(grid : Render::Grid, canvas : Scene::Canvas, state : State, accent : Render::RGB) : Nil
       grid.branch(2, 0, tee: '┠', dir: 1, color: accent)
       label = Core.sanitize(state.error || state.source)
@@ -187,38 +185,24 @@ module JekyllHyde::View
       top = PANEL_TOP
       cap = capacity(canvas.rows)
       rows_top = top + 1
-      divider(grid, {top, left, right}, accent)
-      overflow(grid, top, right, state, cap)
+      Text.section_rail(grid, {top, left, right}, "MATCHES", accent)
+      overflow(grid, top, right, state, cap: cap)
       rows(grid, {rows_top, rows_top + cap - 1}, Columns.new(left, right, accent), state)
       footer(grid, {rows_top + cap, left, right}, state)
     end
 
     # A right-aligned position readout on the section rail when the matches run
     # taller than the panel, so a long list reads as scrollable, not clipped.
-    private def overflow(grid : Render::Grid, row : Int32, right : Int32, state : State, cap : Int32) : Nil
+    private def overflow(grid : Render::Grid, row : Int32, right : Int32, state : State, *, cap : Int32) : Nil
       total = state.matches.size
       return if cap <= 0 || total <= cap
       offset = state.scroll.clamp(0, total - cap)
       grid.rtext(row, right, " #{offset + 1}-#{offset + cap} of #{total} ", Render::MUTED)
     end
 
-    # The section rail `┏━┫ MATCHES ┣━━…`, the spine the entry nodes hang from.
-    private def divider(grid : Render::Grid, geom : Tuple(Int32, Int32, Int32), accent : Render::RGB) : Nil
-      row, left, right = geom
-      rail = Render.dim(accent, 0.55)
-      grid.put(row, left, '┏', rail)
-      grid.put(row, left + 1, '━', rail)
-      grid.put(row, left + 2, '┫', rail)
-      grid.text(row, left + 4, "MATCHES", accent)
-      grid.put(row, left + 12, '┣', rail)
-      (left + 13..right).each { |col| grid.put(row, col, '━', Render.dim(accent, 0.3)) }
-    end
-
-    # The window of matches that fits, in file order, scrolled by the state's
-    # offset and clamped so it never runs off either end; each a node on the
-    # spine (`┣━◈`, the last `┗━◈`). Each entry is sanitized to at most the
-    # visible width here, the one boundary where a file-supplied line reaches the
-    # screen, so a pathologically long line costs O(width), not O(line).
+    # The window of matches that fits, scrolled and clamped, each a node on the
+    # spine. Each entry is sanitized to at most the visible width here (the one
+    # boundary a file line reaches the screen), so a long line costs O(width).
     private def rows(grid : Render::Grid, vert : Tuple(Int32, Int32), cols : Columns, state : State) : Nil
       top, bottom = vert
       limit = bottom - top + 1

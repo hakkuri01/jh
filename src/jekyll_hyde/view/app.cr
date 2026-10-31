@@ -95,11 +95,8 @@ module JekyllHyde::View
     end
 
     # Launches straight into a scan composed on the command line (the power-user
-    # override): the TUI opens on the running dashboard, skipping the opener and
-    # the form. q from the finished dashboard drops to the cockpit to compose
-    # another, and a second q quits. A no-op when the terminal is not
-    # interactive. The session is not built until `init`, so an early return here
-    # never leaves an orphaned scan fiber running.
+    # override): the TUI opens on the running dashboard. A no-op off an interactive
+    # terminal; the session is built in `init`, so an early return orphans nothing.
     def self.launch(config : ScanConfig, output : IO = STDOUT) : Nil
       terminal = Tui::Terminal.new(STDIN, output)
       return unless terminal.interactive?
@@ -236,11 +233,9 @@ module JekyllHyde::View
       @editing ? insert_key(name) : normal_key(name)
     end
 
-    # NORMAL: j/k (and arrows) move between fields, i edits the focused field,
-    # Enter runs the scan, Tab swaps the mode engine, h opens the command
-    # reference, q quits (once the cockpit is open there is no reason to return to
-    # the opener). Esc is inert here, so a reflexive Esc out of editing never
-    # drops the whole TUI.
+    # NORMAL keys: j/k and arrows move between fields, i edits, Enter runs, Tab
+    # swaps the mode, h opens the reference, q quits. Esc is inert here, so a
+    # reflexive Esc out of editing never drops the whole TUI.
     private def normal_key(name : String) : {Tui::Model, Tui::Cmd?}
       case name
       when "j", "down" then move(1)
@@ -276,10 +271,9 @@ module JekyllHyde::View
       {self, nil}
     end
 
-    # The wordlist finder opens from NORMAL on `/`, but only when the focused
-    # field is the wordlist and it holds a path: there is nothing to preview
-    # otherwise. The list loads once here with the mode's discipline; a bad path
-    # is held as an error the overlay shows, not raised.
+    # The wordlist finder opens on `/` only when the focused field is the wordlist
+    # and holds a path. The list loads once with the mode's discipline; a bad path
+    # becomes an error the overlay shows, not a raise.
     private def open_finder : {Tui::Model, Tui::Cmd?}
       field = Shell.fields(@mode)[@field]
       value = @values[@field]
@@ -309,17 +303,12 @@ module JekyllHyde::View
       @finder.try(&.state) || Finder::State.new(@mode, "", 0, "", [] of String, 0, nil)
     end
 
-    # INSERT: printable keys and Backspace/Delete edit at the caret, the arrows
-    # and Home/End move the caret within the field, Enter runs the scan, and Esc
-    # leaves INSERT for NORMAL. The INSERT caret editing and NORMAL field
-    # navigation live in app_editing.cr (a reopened App), to keep this file under
-    # the size limit.
+    # INSERT caret editing and NORMAL field navigation live in app_editing.cr (a
+    # reopened App), to keep this file under the size limit.
 
-    # Run the composed scan in either mode, but only once the mandatory fields
-    # are set (target and wordlist, plus a FUZZ keyword in Jekyll); otherwise
-    # Enter is a no-op and the composed command stays on screen. The scan runs on
-    # its own fiber inside the session; `listen` streams each hit back into this
-    # loop.
+    # Run the composed scan, but only once the mandatory fields are set (target,
+    # wordlist, and a FUZZ keyword in Jekyll); otherwise Enter is a no-op. The scan
+    # runs on its own fiber in the session; `listen` streams each hit into the loop.
     private def execute : {Tui::Model, Tui::Cmd?}
       return {self, nil} unless ready?
       {self, start_scan(compose)}
@@ -397,13 +386,9 @@ module JekyllHyde::View
       {self, nil}
     end
 
-    # In the results view, q stops the scan and returns to the cockpit so the
-    # user can adjust and re-run (and q again there quits); p holds and resumes
-    # the scan in place; the arrows (and j/k), PageUp/PageDown, and Home/End
-    # scroll the dashboard through a result run too tall to fit, while the HUD
-    # frame stays put. Down and PageDown move toward older hits (the list reads
-    # newest-first), Home jumps back to the newest, End to the oldest. Esc is
-    # inert, so it cannot drop the dashboard by reflex.
+    # Results-view keys: q stops the scan and returns to the cockpit (q there
+    # quits), p holds and resumes, and the arrows/j/k, PageUp/PageDown, Home/End
+    # scroll the newest-first run. Esc is inert, so it cannot drop the dashboard.
     private def scanning_key(name : String) : {Tui::Model, Tui::Cmd?}
       case name
       when "q"         then stop_scan

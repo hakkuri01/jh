@@ -72,4 +72,28 @@ describe JekyllHyde::Hyde::Extractor do
     paths = extractor.extract(%(<a href="#{deep}">x</a>), "/")
     paths.size.should be <= 2 # the full path, not 5000 parent directories
   end
+
+  it "caps how many links one hostile body can yield (bounds the work, not just the queue)" do
+    # Thousands of unique links, each expanding to several sub-paths, would build
+    # a multi-million-entry set; extraction stops at MAX_LINKS.
+    body = String.build { |io| 3_000.times { |n| io << %(<a href="/u#{n}/a/b/c">) } }
+    extractor.extract(body, "/").size.should be <= JekyllHyde::Hyde::Extractor::MAX_LINKS + 10
+  end
+
+  it "drops a single link longer than the byte cap before it reaches the wire" do
+    giant = "/#{"a" * (JekyllHyde::Hyde::Extractor::MAX_LINK_BYTES + 10)}"
+    extractor.extract(%(<a href="#{giant}">x</a>), "/").should be_empty
+  end
+
+  it "drops non-http(s) scheme links (mailto, javascript, tel, data) rather than requesting them as paths" do
+    body = %(<a href="mailto:a@b.c">m</a><a href="javascript:void(0)">j</a>) \
+           %(<a href="tel:+15550100">t</a><a href="data:text/plain,hi">d</a><a href="/real">r</a>)
+    paths = extractor.extract(body, "/app/index.html")
+    paths.should contain("/real")
+    paths.any? { |p| {"mailto", "javascript", "tel:", "data:"}.any? { |s| p.includes?(s) } }.should be_false
+  end
+
+  it "treats a host that differs only in case as same-origin" do
+    JekyllHyde::Hyde::Extractor.new("http://EXAMPLE.com").extract(%(<a href="http://example.COM/ok">), "/").should contain("/ok")
+  end
 end

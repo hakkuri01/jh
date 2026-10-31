@@ -1,4 +1,5 @@
 require "./graphics"
+require "./grid"
 
 # The Jekyll // Hyde logo.
 module JekyllHyde::Render
@@ -15,9 +16,6 @@ module JekyllHyde::Render
     WORDMARK = {{ read_file("#{__DIR__}/../../../data/logo/wordmark.txt") }}
     # The mask's height in cells on the loading screen and the banner.
     DEFAULT_ROWS = 18
-    # Jekyll violet and Hyde red; the wordmark runs a gradient between them.
-    VIOLET = {176, 96, 232}
-    RED    = {240, 48, 72}
 
     # The banner: the mask image (when *images*) above the wordmark, else the
     # wordmark alone. *rows* is the image's height in cells.
@@ -67,16 +65,12 @@ module JekyllHyde::Render
       (PNG[at].to_i << 24) | (PNG[at + 1].to_i << 16) | (PNG[at + 2].to_i << 8) | PNG[at + 3].to_i
     end
 
-    # The gradient color at *index* of *span*: violet at 0, red at the end. Used
-    # across columns or down rows, so the wordmark can run it either way.
+    # The gradient color at *index* of *span*: violet at 0, red at the end. The
+    # endpoints are the two mode accents, so the wordmark runs Jekyll violet to
+    # Hyde red. Used across columns or down rows, so it can run either way.
     def self.gradient(index : Int32, span : Int32) : {Int32, Int32, Int32}
       f = span <= 1 ? 0.0 : index / (span - 1).to_f
-      {lerp(VIOLET[0], RED[0], f), lerp(VIOLET[1], RED[1], f), lerp(VIOLET[2], RED[2], f)}
-    end
-
-    # *a* moved *f* (0 to 1) of the way to *b*.
-    private def self.lerp(a : Int32, b : Int32, f : Float64) : Int32
-      (a + (b - a) * f).round.to_i
+      Render.lerp(JEKYLL, HYDE, f)
     end
 
     # *char* in truecolor *rgb*.

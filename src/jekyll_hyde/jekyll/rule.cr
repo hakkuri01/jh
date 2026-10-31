@@ -101,7 +101,11 @@ module JekyllHyde::Jekyll
     end
 
     def matches?(candidate : Candidate) : Bool
-      text = candidate.headers + String.new(candidate.body).scrub
+      # Scrub the headers and body together: a hostile response header may carry a
+      # raw 0x80..0xFF byte the stdlib leaves as invalid UTF-8, and PCRE2 raises
+      # on an invalid subject, which would abort the scan. Scrubbing first keeps
+      # one bad byte from turning a --mr/--fr run into a crash.
+      text = String.build { |io| io << candidate.headers; io.write(candidate.body) }.scrub
       !@pattern.match(text).nil?
     end
 

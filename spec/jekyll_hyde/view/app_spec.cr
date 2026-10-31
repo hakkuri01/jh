@@ -1,5 +1,6 @@
 require "../../spec_helper"
 require "../../support/fixture_server"
+require "../../support/wordlists"
 require "../../../src/jekyll_hyde/view/app"
 
 # The top-left corner glyph and color of the app's current frame, which carries
@@ -9,19 +10,14 @@ private def corner(app : JekyllHyde::View::App) : JekyllHyde::Render::Cell
 end
 
 # The frame's rows as plain text, so a composed line can be matched by substring.
-private def lines(app : JekyllHyde::View::App) : Array(String)
-  app.view(100, 40).cells.map { |line| String.build { |io| line.each { |cell| io << cell[0] } } }
+# *height* matters on the scan dashboard, whose capacity and scrolling depend on it.
+private def lines(app : JekyllHyde::View::App, height : Int32 = 40) : Array(String)
+  app.view(100, height).cells.map { |line| String.build { |io| line.each { |cell| io << cell[0] } } }
 end
 
-# Whether any row of the current frame contains *text*.
-private def shows?(app : JekyllHyde::View::App, text : String) : Bool
-  lines(app).any?(&.includes?(text))
-end
-
-# Whether any row of the frame rendered at *height* contains *text* (the scan
-# dashboard's capacity, and so its scrolling, depends on the terminal height).
-private def shows_at?(app : JekyllHyde::View::App, text : String, height : Int32) : Bool
-  app.view(100, height).cells.map { |line| String.build { |io| line.each { |cell| io << cell[0] } } }.any?(&.includes?(text))
+# Whether any row of the frame rendered at *height* contains *text*.
+private def shows?(app : JekyllHyde::View::App, text : String, height : Int32 = 40) : Bool
+  lines(app, height).any?(&.includes?(text))
 end
 
 # Whether any cell of the current frame carries a background wash.
@@ -34,14 +30,6 @@ private def held : JekyllHyde::View::App
   app = JekyllHyde::View::App.new(false)
   app.update(JekyllHyde::Tui::TickMsg.new(Time.instant + 5.seconds))
   app
-end
-
-# A wordlist file holding *words*, one per line.
-private def wordlist_file(*words : String) : String
-  file = File.tempfile("jh_wl")
-  words.each { |word| file.puts(word) }
-  file.close
-  file.path
 end
 
 # Focus the cockpit field at *index* from any field (k clamps to the top).
@@ -87,11 +75,11 @@ describe JekyllHyde::View::App do
     _, command = app.update(JekyllHyde::Tui::KeyMsg.new("tab"))
     command.should_not be_nil # the switch animation plays from the help page
     app.update(JekyllHyde::Tui::TickMsg.new(Time.instant + 5.seconds))
-    shows?(app, "COMMAND REFERENCE").should be_true                 # still on the reference
-    shows?(app, "injection keyword, required in -u").should be_true # now the Jekyll panel
-    app.update(JekyllHyde::Tui::KeyMsg.new("esc"))                  # esc is inert here (cheatsheet says h/q)
-    shows?(app, "COMMAND REFERENCE").should be_true                 # still on the reference
-    app.update(JekyllHyde::Tui::KeyMsg.new("q"))                    # steps back, does not quit
+    shows?(app, "COMMAND REFERENCE").should be_true                          # still on the reference
+    shows?(app, "keyword, required somewhere in the request").should be_true # now the Jekyll panel
+    app.update(JekyllHyde::Tui::KeyMsg.new("esc"))                           # esc is inert here (cheatsheet says h/q)
+    shows?(app, "COMMAND REFERENCE").should be_true                          # still on the reference
+    app.update(JekyllHyde::Tui::KeyMsg.new("q"))                             # steps back, does not quit
     shows?(app, "jh --jekyll").should be_true
   end
 
@@ -417,15 +405,15 @@ describe JekyllHyde::View::App do
       _, command = app.update(JekyllHyde::Tui::KeyMsg.new("enter"))
       pump(app, command)
       # newest-first, four fit: foxtrot down to charlie; alpha/bravo are off-screen
-      shows_at?(app, "/foxtrot", 16).should be_true
-      shows_at?(app, "/alpha", 16).should be_false
-      shows_at?(app, "of 6", 16).should be_true      # the position readout proves more exist
+      shows?(app, "/foxtrot", 16).should be_true
+      shows?(app, "/alpha", 16).should be_false
+      shows?(app, "of 6", 16).should be_true         # the position readout proves more exist
       app.update(JekyllHyde::Tui::KeyMsg.new("end")) # scroll to the oldest
-      shows_at?(app, "/alpha", 16).should be_true
-      shows_at?(app, "/foxtrot", 16).should be_false
+      shows?(app, "/alpha", 16).should be_true
+      shows?(app, "/foxtrot", 16).should be_false
       app.update(JekyllHyde::Tui::KeyMsg.new("home")) # back to the newest
-      shows_at?(app, "/foxtrot", 16).should be_true
-      shows_at?(app, "/alpha", 16).should be_false
+      shows?(app, "/foxtrot", 16).should be_true
+      shows?(app, "/alpha", 16).should be_false
     ensure
       server.stop
       File.delete(path)

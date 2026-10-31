@@ -37,7 +37,7 @@ module JekyllHyde
         return 2
       end
       return Headless.run(config, @io, @err) if config.headless?
-      unless @io.tty?
+      unless @io.tty? && STDIN.tty?
         @err.puts "error: jh needs an interactive terminal; give it no arguments to compose a scan, a full command to run one, or add --headless to run without a terminal"
         return 2
       end
@@ -48,10 +48,9 @@ module JekyllHyde
       2
     end
 
-    # Parse argv into a config, the chosen mode and every flag folded in as the
-    # handlers fire. Returns the parser (for the help text), the config, and
-    # whether help was asked. Raises ArgumentError on an unknown option or a
-    # malformed flag value, caught by `run`.
+    # Parse argv into a config, folding in the mode and every flag as the handlers
+    # fire. Returns the parser (for help text), the config, and whether help was
+    # asked. Raises ArgumentError on an unknown option or bad value, caught by `run`.
     def parse(argv : Array(String)) : {OptionParser, ScanConfig, Bool}
       config = ScanConfig.new
       help = false
@@ -76,6 +75,12 @@ module JekyllHyde
       c.method = "POST" if body && !body.empty? && c.method == "GET"
     end
 
+    # An integer flag value, refused with one actionable line rather than silently
+    # kept as the default (ffuf and feroxbuster both reject a non-numeric value).
+    private def int_flag(value : String, flag : String) : Int32
+      value.to_i? || raise ArgumentError.new("#{flag} needs a whole number")
+    end
+
     # Flags shared by both modes.
     private def common_flags(p : OptionParser, c : ScanConfig) : Nil
       p.on("--hyde", "recursive discovery") { c.mode = "HYDE"; c.mode_set = true }
@@ -83,7 +88,7 @@ module JekyllHyde
       p.on("-u URL", "--url=URL", "target URL (FUZZ marks the Jekyll injection point)") { |v| c.url = v }
       p.on("-w FILE", "--wordlist=FILE", "wordlist path (repeatable; FILE:KEYWORD for Jekyll input)") { |v| c.wordlists << v }
       p.on("-e LIST", "--extensions=LIST", "extensions to append, e.g. php,html") { |v| c.extensions = v.split(',').map(&.strip).reject(&.empty?) }
-      p.on("-t N", "--threads=N", "concurrent requests (default 40)") { |v| c.threads = v.to_i? || c.threads }
+      p.on("-t N", "--threads=N", "concurrent requests (default 40)") { |v| c.threads = int_flag(v, "-t") }
       p.on("-k", "--insecure", "skip TLS certificate verification") { c.insecure = true }
       p.on("-X METHOD", "--method=METHOD", "HTTP request method (default GET)") { |v| c.method = v.strip.upcase }
       p.on("-H LINE", "--header=LINE", "request header 'Name: Value' (repeatable)") { |v| c.headers << v }
@@ -135,7 +140,7 @@ module JekyllHyde
 
     # Hyde's depth bound and opt-in behaviors.
     private def hyde_flags(p : OptionParser, c : ScanConfig) : Nil
-      p.on("-d N", "--depth=N", "max recursion depth (default 4, Hyde)") { |v| c.depth = v.to_i? || c.depth }
+      p.on("-d N", "--depth=N", "max recursion depth (default 4, Hyde; 0 = unlimited)") { |v| c.depth = int_flag(v, "-d") }
       p.on("--no-recursion", "scan only the target, no descent (Hyde)") do
         c.no_recursion = true
         c.hyde_used = true
@@ -150,21 +155,20 @@ module JekyllHyde
       end
     end
 
-    # Whether the parsed command is runnable. A mode is mandatory here: a command
-    # launches straight into the scan, so it must say which engine. Mode-specific
-    # flags used against the wrong engine are rejected rather than silently
-    # ignored.
+    # Whether the parsed command is runnable. A mode is mandatory (a command
+    # launches straight into the scan), and a mode-specific flag used against the
+    # wrong engine is rejected rather than silently ignored.
     private def validate(c : ScanConfig) : String?
       return "pick a mode: --hyde or --jekyll" unless c.mode_set?
       return "a target URL is required (-u)" if c.url.empty?
       return "a wordlist is required (-w)" if c.wordlists.empty?
+      return "recursion depth (-d) cannot be negative; use 0 for unlimited" if c.depth < 0
       wrong_mode_flag(c) || bad_method(c) || bad_header(c) || missing_fuzz(c) || bad_format(c)
     end
 
-    # The request method must be one jh knows how to send, unless it is a Jekyll
-    # template carrying a bound keyword (ffuf fuzzes the method too): that only
-    # resolves to a real method per request, so the static allowlist cannot judge
-    # it here and the typo-guard applies to static methods alone.
+    # The request method must be one jh can send, unless it is a Jekyll template
+    # carrying a bound keyword (ffuf fuzzes the method too): that resolves per
+    # request, so the allowlist (a typo guard) only judges a static method.
     private def bad_method(c : ScanConfig) : String?
       return nil if c.mode == "JEKYLL" && keywords(c).any? { |keyword| c.method.includes?(keyword) }
       "method must be one of #{METHODS.join(", ")}" unless METHODS.includes?(c.method)
@@ -191,7 +195,7 @@ module JekyllHyde
     private def missing_fuzz(c : ScanConfig) : String?
       return nil unless c.mode == "JEKYLL"
       if missing = missing_keyword(c)
-        "Jekyll needs the #{missing} keyword in the URL (-u)"
+        "Jekyll needs the #{missing} keyword somewhere in the request (the URL, a header, the cookie, the method, or the body)"
       end
     end
 

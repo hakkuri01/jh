@@ -1,3 +1,5 @@
+require "base64"
+require "uri"
 require "./scan_config"
 require "./http/client"
 require "./wordlist/list"
@@ -18,6 +20,10 @@ module JekyllHyde
     extend self
 
     def build(config : ScanConfig) : Hyde::Scan | Jekyll::Scan
+      # The one home for target validation on the build path: both the TUI session
+      # and the headless runner reach the engine through here, so neither keeps
+      # its own copy of the check (AGENTS Security 9).
+      raise ArgumentError.new("not a valid URL; use http://host or https://host") unless Http.valid_url?(config.url)
       config.mode == "JEKYLL" ? build_jekyll(config) : build_hyde(config)
     end
 
@@ -33,7 +39,7 @@ module JekyllHyde
       end
       template = Jekyll::Template.new(config.url, sources.map(&.keyword))
       input = Jekyll::Input.new(sources, config.input_mode)
-      options = Http::Options.jekyll(verify_tls: !config.insecure?, method: config.method, headers: config.request_headers, body: config.body)
+      options = Http::Options.jekyll(verify_tls: !config.insecure?, method: config.method, headers: request_headers(config), body: config.body)
       Jekyll::Scan.new(template, input, options, concurrency: config.threads, rules: jekyll_rules(config), auto_calibrate: config.calibrate?)
     end
 
@@ -44,7 +50,7 @@ module JekyllHyde
       paths = config.wordlists.map { |spec| Jekyll::Source.split(spec)[0] }
       list = Wordlist::List.deduplicated(paths).with_extensions(config.extensions)
       depth = config.no_recursion? ? 1 : config.depth
-      options = Http::Options.hyde(verify_tls: !config.insecure?, method: config.method, headers: config.request_headers, body: config.body)
+      options = Http::Options.hyde(verify_tls: !config.insecure?, method: config.method, headers: request_headers(config), body: config.body)
       Hyde::Scan.new(config.url, list, options, concurrency: config.threads, max_depth: depth, auto_tune: config.auto_tune?, similar_to: config.filter_similar)
     end
 
@@ -53,6 +59,25 @@ module JekyllHyde
     private def jekyll_rules(config : ScanConfig) : Jekyll::Rules
       matchers = config.matchers.empty? ? [Jekyll::Rule.build("status", Jekyll::Rules::DEFAULT_STATUS)] : config.matchers
       Jekyll::Rules.new(matchers, config.filters, matcher_mode: config.matcher_mode, filter_mode: config.filter_mode)
+    end
+
+    # The request headers plus HTTP Basic auth from any userinfo in the target URL
+    # (http://user:pass@host), as ffuf and feroxbuster send, unless the operator
+    # already set an Authorization header. The userinfo never reaches a result URL
+    # (built from the host-only origin), so the supplied secret is not exported.
+    private def request_headers(config : ScanConfig) : Array(String)
+      headers = config.request_headers
+      auth = basic_auth(config.url)
+      return headers unless auth
+      return headers if headers.any? { |line| line.lstrip.downcase.starts_with?("authorization:") }
+      headers + [auth]
+    end
+
+    private def basic_auth(url : String) : String?
+      uri = URI.parse(url) rescue return nil
+      user = uri.user
+      return nil unless user
+      "Authorization: Basic #{Base64.strict_encode("#{user}:#{uri.password}")}"
     end
   end
 end

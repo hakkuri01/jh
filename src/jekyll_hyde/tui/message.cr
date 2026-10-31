@@ -1,7 +1,6 @@
 # The messages that drive the Elm-architecture runtime. Something happens (a key,
 # a resize, an animation tick, or a quit), a message carries it to the model, and
-# the model returns a new model and an optional command. Mouse and paste land
-# with the interactive shell, which is the first thing that needs them.
+# the model returns a new model and an optional command.
 module JekyllHyde::Tui
   # Something that happened.
   abstract struct Msg

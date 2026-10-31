@@ -59,7 +59,7 @@ just verify                  # the gate
 
 ## Usage
 
-`jh` with no arguments opens the composer. Give it a full command and it launches straight onto the running scan dashboard, skipping the opener and the form, so a one-off scan is one line. A command must name a mode (`--hyde` or `--jekyll`), since it runs at once. By default it draws into an interactive terminal; add `--headless` to run with no terminal at all, streaming results to `-o` or stdout (progress on stderr, an exit code for chaining) for scripts, CI, and agent workflows. Multi-character flags are double-dashed (Crystal's option style); single letters stay short; the interactive `h` page lists them all.
+`jh` with no arguments opens the composer. Give it a full command and it launches straight onto the running scan dashboard, skipping the opener and the form, so a one-off scan is one line. A command must name a mode (`--hyde` or `--jekyll`), since it runs at once. By default it draws into an interactive terminal; add `--headless` to run with no terminal at all, writing results to `-o` or stdout when the scan finishes or is interrupted (progress on stderr, an exit code for chaining) for scripts, CI, and agent workflows. Multi-character flags are double-dashed (Crystal's option style); single letters stay short; the interactive `h` page lists them all.
 
 ```bash
 jh [--hyde | --jekyll] -u URL -w WORDLIST [options]
@@ -86,7 +86,7 @@ Hyde (recursive discovery):
 
 | Flag | Meaning |
 | --- | --- |
-| `-d N` | max recursion depth (default 4) |
+| `-d N` | max recursion depth (default 4; `0` = unlimited) |
 | `--no-recursion` | scan only the target, no descent |
 | `--auto-tune` | back off concurrency under 429 / 403 floods |
 | `--filter-similar-to URL` | drop pages similar to URL, e.g. a soft 404 (repeatable) |
@@ -159,7 +159,7 @@ A bare drag selects and copies text, and the wheel scrolls; the app does not cap
 
 ## Output
 
-Results are not written to disk by default. Pass `-o FILE` to write them, when the scan finishes, as JSON (the default) or CSV with `--format csv`. Supplied request headers, cookies, and bodies are never written to an export.
+Results are not written to disk by default. Pass `-o FILE` to write them, when the scan finishes or is stopped, as JSON (the default) or CSV with `--format csv`. Supplied request headers, cookies, and bodies are never written to an export.
 
 ---
 
@@ -169,5 +169,4 @@ Default scans are complete in both modes. These are the opt-in paths jh will gro
 
 - **Mid-run scan control.** A scan already pauses, resumes, and cancels. Next is running several at once from the dashboard: add a target without stopping the others, cancel a single scan, add or remove a filter mid-run, and raise or lower the concurrency limit while a scan is live.
 - **Custom and per-host calibration.** Jekyll runs one built-in calibration strategy today. Next: supply your own calibration probes and strategy, and calibrate each host separately once a single run can target more than one origin.
-- **Reproducible Nix build.** The flake pins Crystal 1.21.1 but still carries a placeholder compiler-source hash and no committed `flake.lock`, so `nix build` needs the real hash wired in and the lock committed before the Nix install path is reproducible from a clean checkout.
 - **HTTP/2.** jh speaks HTTP/1.1 today. Negotiating HTTP/2 over TLS is the modern fuzzing-tool standard, and a target that answers differently over HTTP/2 than over HTTP/1.1 is a parity gap: small enough to be a non-issue on the large majority of scans, but real. The plan, if we take it on, is transparent HTTP/2 in Hyde (negotiated when the target offers it, falling back to HTTP/1.1) and opt-in in Jekyll behind an `--http2` flag, default off, so precise fuzzing stays exactly as composed. It is substantial work, since Crystal's standard library has no HTTP/2 client: we would either lean on a maturing community shard such as [ysbaddaden/http2](https://github.com/ysbaddaden/http2) if it keeps progressing, or hand-roll our own as [Gori](https://github.com/hahwul/gori) does. Either way it is tabled until we choose to build it, or until the language ecosystem closes the gap first.
