@@ -7,10 +7,10 @@ module JekyllHyde::Jekyll
   # with its wordlist entry, verbatim (operator bytes; percent-encoding is an
   # opt-in flag to come). Keywords stay out of the host, so one scan targets one
   # origin, which is what the request pool binds to. A keyword need not appear in
-  # the URL: it may be fuzzed in a header, cookie, or method instead (ffuf lets
-  # FUZZ live in any request part), so the template substitutes whichever
-  # keywords are present and leaves the rest; the command line checks that each
-  # keyword appears in *some* part.
+  # the URL: it may be fuzzed in a header, cookie, or method instead, since what
+  # is being fuzzed is a request and not just its path, so the template
+  # substitutes whichever keywords are present and leaves the rest; the command
+  # line checks that each keyword appears in *some* part.
   class Template
     KEYWORD = "FUZZ"
 

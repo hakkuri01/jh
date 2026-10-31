@@ -258,7 +258,7 @@ describe JekyllHyde::View::ScanSession do
     end
   end
 
-  it "cancel closes the result channel so listen resolves instead of raising into the Elm loop (F-19)" do
+  it "cancel closes the result channel so listen resolves instead of raising into the Elm loop" do
     server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
     path = wordlist_file("admin")
     begin

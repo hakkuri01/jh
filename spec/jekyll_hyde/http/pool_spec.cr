@@ -118,7 +118,7 @@ describe JekyllHyde::Http::Pool do
     end
   end
 
-  it "drains in-flight workers and returns when the consumer stops early on cancel (F-19)" do
+  it "drains in-flight workers and returns when the consumer stops early on cancel" do
     routes = {} of String => FixtureServer::Route
     8.times { |i| routes["/p#{i}"] = FixtureServer::Route.new(200, "x", delay: 20.milliseconds) }
     server = FixtureServer.new(routes)

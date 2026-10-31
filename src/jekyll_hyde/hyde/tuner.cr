@@ -5,9 +5,10 @@ module JekyllHyde::Hyde
   # 403s reach 90% of the window, or 429s reach 30%) and otherwise doubles back
   # up toward the original. It is throughput only; findings are unchanged. The
   # window counters reset each round, so the backoff never latches and the
-  # double-up recovery stays reachable once a flood subsides (feroxbuster samples
-  # per-interval error deltas, not lifetime totals). A 503 is not a trigger (it
-  # is a response, not a request error).
+  # double-up recovery stays reachable once a flood subsides: a rate is only
+  # meaningful over a recent window, where lifetime totals would hold the scan
+  # down for errors it already recovered from. A 503 is not a trigger (it is a
+  # response, not a request error).
   class Tuner
     HIGH_ERROR_RATIO = 0.90
 

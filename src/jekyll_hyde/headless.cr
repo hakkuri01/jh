@@ -42,8 +42,8 @@ module JekyllHyde
       report_error(Core.sanitize(ex.message || "scan failed"))
     end
 
-    # Run the scan with SIGINT/HUP/TERM flipping the cancel flag, so a killed run
-    # stops the scan and still writes what it found (as ffuf and feroxbuster do).
+    # SIGINT/HUP/TERM flip the cancel flag, so a killed run still writes what it
+    # found: discarding real results would make one keypress cost the whole scan.
     # Default handling is restored after, leaving no global signal state behind.
     private def with_interrupt_trap(&) : Core::Results
       Process.on_terminate { @interrupted = true }

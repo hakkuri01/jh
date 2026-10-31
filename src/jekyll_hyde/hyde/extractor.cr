@@ -12,11 +12,11 @@ module JekyllHyde::Hyde
     # robots.txt Allow/Disallow lines (handled per line, so no multiline flag).
     ROBOTS = /^\s*(?:allow|disallow)\s*:\s*([^\s#]*)/i
     # RFC 3986 characters that may not appear in a path, stripped per segment.
-    # This mirrors feroxbuster's url_regex.replace_all exactly: a deliberate
-    # parity choice. AGENTS Security 2 would prefer percent-encoding to repair,
-    # but these bytes are illegal in a path anyway and both references strip them,
-    # so stripping is the intentional standard here, revisited only if a real
-    # target is ever shown to be mis-probed because of it.
+    # A crawled link is a hint about what to probe next, not a URL we were told to
+    # follow, so these are dropped rather than percent-encoded: stripping recovers
+    # the path the page author meant, while encoding would invent a path the server
+    # never published. Nothing downstream trusts the result; the worst case is one
+    # request that 404s.
     URL_CHARS = /["<>\\^`{|} ]/
     # The deepest path expanded into parent sub-paths. The walk is O(segments^2)
     # in time and output, so a hostile body emitting a link with thousands of
@@ -27,7 +27,9 @@ module JekyllHyde::Hyde
     # body-cap-sized body with unique links; without a cap here, extract would
     # expand every one into sub-paths and build a multi-million-entry set before
     # the scan applied any limit, so the cap bounds the work, not just the queue
-    # (AGENTS Big O 6). 500 is feroxbuster's effective per-response breadth.
+    # (AGENTS Big O 6). 500 is well past any real page: a body linking more
+    # distinct in-scope paths than that is a generated index, whose children
+    # recursion reaches anyway.
     MAX_LINKS = 500
     # The longest a single page-authored link may be. A body-cap-sized single
     # segment slips past MAX_PATH_SEGMENTS (it has one segment), so its byte length
@@ -40,13 +42,12 @@ module JekyllHyde::Hyde
     # heredoc keeps the backslashes literal, which is why ameba's unescape rule is
     # off on the line.
     #
-    # The alternation is wrapped in an atomic group `(?>...)`. feroxbuster runs
-    # this on Rust's linear regex engine; PCRE2 (Crystal's engine) backtracks, and
-    # a quoted run with no closing quote (`"/a/a/a...`) makes it retry the greedy
-    # run O(n) times for O(n squared) blow-up, a hostile-target DoS within the body
-    # cap. Every branch's run already stops before the closing quote, so it never
-    # needs to give characters back on real input: the atomic group changes no
-    # match, it only forbids the backtracking feroxbuster's engine never did.
+    # The alternation is wrapped in an atomic group `(?>...)`. PCRE2, Crystal's
+    # engine, backtracks: a quoted run with no closing quote (`"/a/a/a...`) makes
+    # it retry the greedy run O(n) times for O(n squared) blow-up, a hostile-target
+    # DoS inside the body cap. Every branch's run already stops before the closing
+    # quote, so it never needs to give characters back on real input; the atomic
+    # group changes no match, it only forbids that backtracking.
     LINKFINDER = Regex.new(<<-'PATTERN', Regex::Options::EXTENDED) # ameba:disable Style/HeredocEscape
       (?:"|')
       (
@@ -105,9 +106,9 @@ module JekyllHyde::Hyde
         uri = URI.parse(candidate) rescue return nil
         same_host?(uri.host) ? uri.path : nil
       elsif link =~ /\A[a-zA-Z][a-zA-Z0-9+.\-]*:/
-        # A non-http(s) scheme (mailto:, tel:, javascript:, data:): not a path to
-        # request. feroxbuster drops these off-origin through Url::join;
-        # concatenating them would put junk, or a huge data: URI, on the wire.
+        # A non-http(s) scheme (mailto:, tel:, javascript:, data:): not a path on
+        # this origin, so out of scope by definition. Concatenating it would put
+        # junk, or a multi-megabyte data: payload, on the wire as a request target.
         nil
       elsif link.starts_with?("/")
         link

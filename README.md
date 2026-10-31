@@ -4,8 +4,8 @@
 
 <p align="center">
 <img src="https://img.shields.io/badge/Crystal-black.svg?style=plastic&logo=crystal&logoColor=white">
-<img src="https://img.shields.io/badge/v0.1.0-black.svg?style=plastic&logo=git&logoColor=B060E8">
-<img src="https://img.shields.io/badge/Bug%20Bounty-black.svg?style=plastic&logo=owasp&logoColor=F03048">
+<img src="https://img.shields.io/badge/v0.1.0-black.svg?style=plastic&logo=git&logoColor=F03048">
+<img src="https://img.shields.io/badge/Bug%20Bounty-black.svg?style=plastic&logo=owasp&logoColor=B060E8">
 </p>
 
 # Jekyll // Hyde

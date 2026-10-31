@@ -14,8 +14,8 @@ require "./wildcard_filter"
 module JekyllHyde::Hyde
   # Recursive discovery: a breadth-first walk of directories with a seen-URL set
   # and a depth bound. The target's own path is the scan root ("/app" scans under
-  # "/app/", not a reset to "/"), and depth is measured relative to it, matching
-  # feroxbuster. Each directory is calibrated (its wildcard filters accumulate,
+  # "/app/", not a reset to "/"), and depth is measured relative to it, so -d
+  # means the same thing whether the target names a host root or a subdirectory. Each directory is calibrated (its wildcard filters accumulate,
   # keyed by status), then every wordlist entry is requested under it; each kept
   # response's body is mined for links, and any link is requested too, so
   # discovery follows the site's own structure, not just the wordlist. A kept
@@ -30,10 +30,10 @@ module JekyllHyde::Hyde
     # unique links per response must not drive unbounded requests. Links mined
     # from bodies and robots.txt count against MAX_FRONTIER; once it is reached no
     # new discovered path is queued and the walk winds down with one warning. The
-    # operator's own wordlist is NOT counted: every entry is requested under every
-    # in-scope directory (feroxbuster puts no total cap on the wordlist), so a
-    # large list is scanned in full, never truncated. The per-response link cap
-    # and the per-link byte cap live in the Extractor.
+    # operator's own wordlist is NOT counted: it is a bounded input they chose,
+    # where the budget exists to stop a server inventing paths, so counting it
+    # would silently truncate the scan that was asked for. The per-response link
+    # cap and the per-link byte cap live in the Extractor.
     MAX_FRONTIER = 100_000
 
     @results = Core::Results.new
@@ -167,8 +167,8 @@ module JekyllHyde::Hyde
 
     # Fetch a reference page. Its origin usually matches the scan target, so the
     # operator's auth headers and cookie are sent; a cross-origin reference is
-    # fetched WITHOUT them, so a target credential never leaks to another host
-    # (a deliberate step beyond feroxbuster, whose headers are global).
+    # fetched WITHOUT them, since credentials supplied for one origin must not be
+    # handed to an unrelated host just because a filter flag named it.
     private def fetch_reference(uri : URI) : Http::Outcome
       headers = origin_of(uri) == @origin ? Http::Request.headers_from(@options.headers) : HTTP::Headers.new
       request = Http::Request.new("GET", uri.request_target, headers)
@@ -183,9 +183,9 @@ module JekyllHyde::Hyde
       until worklist.empty? || cancelled?
         batch = worklist.to_a
         worklist.clear
-        # The pool runs at the configured ceiling and reads the tuned concurrency
-        # live, so --auto-tune backs a flood off within this batch (feroxbuster
-        # adjusts its live limiter), not only at the next batch boundary.
+        # The pool reads the tuned concurrency live, so --auto-tune backs off
+        # inside this batch: the root batch is the whole wordlist, so waiting for
+        # a boundary would apply the limit only after most of the scan had run.
         Http::Pool.new(@origin, @options, @concurrency).run(batch, @cancel, @pause, limit: -> { @tuner.concurrency }) { |job| handle(job, worklist) }
       end
     end
@@ -198,10 +198,10 @@ module JekyllHyde::Hyde
       return unless outcome
       text = decode(outcome.body)
       response = Core::Response.hyde(@origin + job.path, outcome.status, outcome.body, outcome.location, text: text)
-      # Recurse before filtering: a directory whose body matches the learned
-      # soft-404 is still a directory worth descending, so the recursion decision
-      # comes before the keep/drop filter (feroxbuster recurses before filtering,
-      # "even though this particular url is filtered, subsequent urls may not").
+      # Recurse before filtering: the keep/drop filter answers "is this response
+      # worth reporting", recursion answers "is this a directory worth
+      # descending". A directory serving a soft-404-shaped body is still a
+      # directory, so conflating the two questions loses its children.
       recurse(job.path, outcome)
       return if wildcard_filtered?(response)
       return if sim_filtered?(text)
@@ -284,9 +284,9 @@ module JekyllHyde::Hyde
       end
     end
 
-    # A 3xx is a directory when its Location resolves (against the requested URL)
-    # to that same URL plus a trailing slash, same origin. URI resolve+normalize
-    # handles relative, root-relative, and absolute forms (feroxbuster's url.join).
+    # A 3xx is a directory when its Location resolves, against the requested URL,
+    # to that same URL plus a trailing slash on the same origin. Resolving covers
+    # the relative, root-relative, and absolute forms; a string compare covers one.
     private def directory_redirect?(path : String, location : String) : Bool
       target = URI.parse(@origin + path).resolve(location).normalize
       origin_of(target) == @origin_normalized && target.path == "#{path}/"

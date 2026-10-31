@@ -67,16 +67,17 @@ module JekyllHyde
       {parser, config, help}
     end
 
-    # ffuf/feroxbuster "copy as curl" convenience: a request body with the method
-    # still at its GET default implies POST, so `--data` alone posts. An explicit
-    # `-X` wins, since it is no longer the default by the time this runs.
+    # A body with the method still at its GET default implies POST: supplying a
+    # body states the intent to send one, where GET is only there because nothing
+    # was asked for. An explicit `-X` wins, being no longer the default here.
     private def imply_post(c : ScanConfig) : Nil
       body = c.body
       c.method = "POST" if body && !body.empty? && c.method == "GET"
     end
 
     # An integer flag value, refused with one actionable line rather than silently
-    # kept as the default (ffuf and feroxbuster both reject a non-numeric value).
+    # kept as the default: a scan that quietly runs at settings the operator did
+    # not ask for, and cannot see, is worse than refusing to start.
     private def int_flag(value : String, flag : String) : Int32
       value.to_i? || raise ArgumentError.new("#{flag} needs a whole number")
     end
@@ -167,8 +168,9 @@ module JekyllHyde
     end
 
     # The request method must be one jh can send, unless it is a Jekyll template
-    # carrying a bound keyword (ffuf fuzzes the method too): that resolves per
-    # request, so the allowlist (a typo guard) only judges a static method.
+    # carrying a bound keyword: the method is part of the request, so it is a
+    # legitimate injection point that resolves per request, leaving the allowlist
+    # to do its real job of catching a typo in a static method.
     private def bad_method(c : ScanConfig) : String?
       return nil if c.mode == "JEKYLL" && keywords(c).any? { |keyword| c.method.includes?(keyword) }
       "method must be one of #{METHODS.join(", ")}" unless METHODS.includes?(c.method)
@@ -206,7 +208,7 @@ module JekyllHyde
 
     # The first bound keyword absent from every request part, or nil when each
     # appears somewhere (the URL, a header, the cookie, the method, or the body).
-    # ffuf lets FUZZ live in any part, so a body-only keyword is valid.
+    # What is being fuzzed is a request, not a URL, so a body-only keyword is valid.
     private def missing_keyword(c : ScanConfig) : String?
       parts = [c.url, c.method, c.cookie || "", c.body || ""] + c.headers
       keywords(c).find { |keyword| parts.none?(&.includes?(keyword)) }

@@ -59,7 +59,7 @@ describe JekyllHyde::Hyde::Extractor do
 
   it "stays linear on an unterminated-quote body instead of backtracking without bound" do
     # A quoted run with no closing quote is the classic LinkFinder ReDoS shape;
-    # the atomic group keeps PCRE2 linear where feroxbuster's engine already was.
+    # the atomic group forbids the backtracking that would make PCRE2 superlinear.
     # A catastrophic regex would hang the suite outright, so completing at all is
     # the evidence here (no wall-clock assertion).
     extractor.extract(%("#{"/a" * 100_000}), "/").size.should be < 1000

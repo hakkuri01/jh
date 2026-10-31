@@ -36,9 +36,10 @@ module JekyllHyde::Jekyll
     def initialize(@sources : Array(Source), @mode : Mode = Mode::Clusterbomb)
       raise ArgumentError.new("a Jekyll scan needs at least one wordlist") if @sources.empty?
       raise ArgumentError.new("every wordlist needs a keyword") if @sources.any?(&.keyword.empty?)
-      # Reject two wordlists bound to the same keyword. ffuf allows it, but its
-      # providers then collide on that key (the last one wins), so the run walks
-      # the full product while only one list's values take effect.
+      # Reject two wordlists bound to the same keyword. One injection point can
+      # carry one value per request, so a second binding could only shadow the
+      # first: the run would walk the full product while one list's entries never
+      # reach the wire. Refusing beats silently dropping a list that was asked for.
       keywords.tally.each do |keyword, count|
         raise ArgumentError.new("two wordlists are bound to #{keyword}; give each -w a distinct FILE:KEYWORD") if count > 1
       end

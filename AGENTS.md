@@ -4,6 +4,12 @@ Working rules for AI coding agents on this project.
 
 ## Mandatory Rules
 
+### Behavioral Goals
+
+**Behavioral parity with the established fuzzers on the same input is a project
+goal, and so is going beyond them where they fall short, since jh aims to be the
+best of its kind in the open source community.**
+
 ### Development Environment
 
 Enter the project dev shell with `nix develop` before beginning work. Run all

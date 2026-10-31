@@ -17,9 +17,9 @@ Style/RedundantNilInControlExpression:
 Naming/BlockParameterName:
   Enabled: false
 
-# `.not_nil!` is how a spec asserts a value is present; it is the ordinary spec
-# idiom and both reference projects exclude specs from this rule. Still a real
-# smell in `src/`, where it stays linted.
+# `.not_nil!` is how a spec asserts a value is present: the assertion IS the
+# point, and a failure there is a clear test failure, not a production crash.
+# Still a real smell in `src/`, where it stays linted.
 Lint/NotNil:
   Excluded:
     - "spec/**/*.cr"

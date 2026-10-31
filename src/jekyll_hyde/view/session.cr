@@ -134,8 +134,8 @@ module JekyllHyde::View
       @cancelled = true
       # Wake a scan fiber parked in a full-channel send: with the UI no longer
       # pulling results, that send would never return and the whole request pool
-      # and its sockets would stay parked for the process life (F-19). Closing
-      # makes the parked send raise, which the pool turns into a clean drain.
+      # and its sockets would stay parked for the process life. Closing makes the
+      # parked send raise, which the pool turns into a clean drain.
       @channel.close
     end
 
@@ -157,8 +157,8 @@ module JekyllHyde::View
         @channel.send(ScanHitMsg.new(self, response)) unless @cancelled
       end
       # Export whatever was found, even when q stopped the scan early: the hits
-      # are real and the operator asked for an -o file (ffuf and feroxbuster both
-      # finalize output on interrupt).
+      # are real and the operator asked for an -o file, so stopping should cost
+      # the rest of the scan, not the part that already succeeded.
       @export_warning = export(results)
       @channel.send(ScanDoneMsg.new(self)) unless @cancelled
     rescue ex : File::Error

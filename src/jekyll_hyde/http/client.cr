@@ -23,7 +23,8 @@ module JekyllHyde::Http
 
   # Percent-encode only the bytes that would break the request line in a
   # page-authored path segment (a Hyde wordlist word): space, C0 controls, DEL.
-  # Path-structural bytes (/ ? # % .) are kept, matching feroxbuster's Url::join.
+  # Path-structural bytes (/ ? # % .) are kept, because they are how a path says
+  # which resource it means; encoding them would request a different one.
   # The one home for "is this byte safe in a request target" (AGENTS Security 2, 9).
   def self.request_token(value : String) : String
     return value unless value.each_byte.any? { |byte| unsafe_in_request?(byte) }
@@ -151,8 +152,8 @@ module JekyllHyde::Http
     # instant, so the whole request is held to a time budget, not just each read.
     private def read_outcome(response : HTTP::Client::Response, started : Time::Instant) : Outcome
       # Time to first response byte: this block runs once the headers are parsed,
-      # before the body read, matching ffuf's resp.Duration so a slow body does
-      # not inflate the time a --mt/--ft rule sees.
+      # before the body read. A time rule asks how fast the server answered, so
+      # timing the body too would measure its size and our read cap, not latency.
       ttfb = Time.instant - started
       cap = @options.max_body_size
       budget = @options.read_timeout.seconds
@@ -167,10 +168,10 @@ module JekyllHyde::Http
           buffer.write(chunk[0, take])
           total += take
           break if total > cap
-          # Whole-request time budget (ffuf and feroxbuster bound the entire
-          # request, not just each idle read): a hostile peer that trickles bytes
-          # just under the idle read timeout would otherwise hold a worker until
-          # it reaches the body cap. One monotonic check per chunk.
+          # Whole-request time budget: a read timeout only bounds the gap between
+          # reads, so a peer trickling bytes just inside it holds a worker until
+          # the body cap. Bounding the request is what actually bounds the wait.
+          # One monotonic check per chunk.
           raise Error.new("response exceeded the time budget") if Time.instant - started > budget
         end
       end

@@ -138,7 +138,7 @@ describe JekyllHyde::Headless do
     end
   end
 
-  it "sends URL userinfo as HTTP Basic auth (ffuf/feroxbuster parity) and never into results" do
+  it "sends URL userinfo as HTTP Basic auth and never into results" do
     server = FixtureServer.new({"/admin" => FixtureServer::Route.new(200, "secret")})
     path = wordlist_file("admin")
     begin

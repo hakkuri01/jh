@@ -57,7 +57,7 @@ describe JekyllHyde::Jekyll::Input do
     expect_raises(ArgumentError) { JekyllHyde::Jekyll::Input.new([source("", "a")]) }
   end
 
-  it "rejects two wordlists bound to the same keyword (a confusing ffuf collision, refused)" do
+  it "rejects two wordlists bound to the same keyword (only one could ever take effect)" do
     expect_raises(ArgumentError, "bound to FUZZ") do
       JekyllHyde::Jekyll::Input.new([source("FUZZ", "a", "b"), source("FUZZ", "x", "y")])
     end

@@ -105,7 +105,7 @@ module JekyllHyde::Http
       rescue ex
         # The consumer stopped early (cancel closed the TUI's result channel).
         # Drain so the parked workers free their sockets; swallow a cancel
-        # teardown, re-raise any other consumer failure (F-19).
+        # teardown, re-raise any other consumer failure.
         stopped = true
         drain_results(results)
         raise ex unless cancel.try(&.call)
@@ -126,7 +126,7 @@ module JekyllHyde::Http
 
     # After the consumer stops early its in-flight workers are parked sending to a
     # results channel nobody reads; draining lets each finish its request, free its
-    # socket, and exit instead of parking for the process lifetime (F-19).
+    # socket, and exit instead of parking for the process lifetime.
     private def drain_results(results : Channel(Job)) : Nil
       while results.receive?
       end

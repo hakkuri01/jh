@@ -62,9 +62,10 @@ module JekyllHyde
     end
 
     # The request headers plus HTTP Basic auth from any userinfo in the target URL
-    # (http://user:pass@host), as ffuf and feroxbuster send, unless the operator
-    # already set an Authorization header. The userinfo never reaches a result URL
-    # (built from the host-only origin), so the supplied secret is not exported.
+    # (http://user:pass@host): userinfo is the URL syntax for credentials, so an
+    # operator who types it means to authenticate. An Authorization header they
+    # set themselves wins. The userinfo never reaches a result URL (built from the
+    # host-only origin), so the supplied secret is not exported.
     private def request_headers(config : ScanConfig) : Array(String)
       headers = config.request_headers
       auth = basic_auth(config.url)

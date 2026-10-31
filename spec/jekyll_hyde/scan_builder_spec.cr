@@ -32,7 +32,7 @@ describe JekyllHyde::ScanBuilder do
     end
   end
 
-  it "sends HTTP Basic auth derived from the target userinfo, as ffuf and feroxbuster do" do
+  it "sends HTTP Basic auth derived from the target userinfo" do
     server = FixtureServer.new({} of String => FixtureServer::Route)
     path = wordlist_file("admin")
     begin
